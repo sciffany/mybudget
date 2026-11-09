@@ -157,6 +157,7 @@ export default function TransactionsPage() {
                   <th className="px-2 py-1">Description</th>
                   <th className="px-2 py-1 text-right">Amount</th>
                   <th className="px-2 py-1">Category</th>
+                  <th className="px-2 py-1">Umbrella</th>
                   <th className="px-2 py-1">Account</th>
                 </tr>
               </thead>
@@ -186,6 +187,9 @@ export default function TransactionsPage() {
                     </td>
                     <td className="whitespace-nowrap px-2 py-1 align-top">
                       {t.category_name ?? ""}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-1 align-top">
+                      {t.umbrella_name ?? ""}
                     </td>
                     <td className="whitespace-nowrap px-2 py-1 align-top">
                       {t.account_name ?? ""}

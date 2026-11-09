@@ -34,6 +34,50 @@ const DB_PATH = "/budget.sqlite3";
 // else served from the same origin.
 const VFS_DIR = ".mybudget-sqlite";
 
+/**
+ * Categories created on every startup when they are missing. Flow follows the
+ * umbrella: spending and planning are expenses, Transfer is a transfer, and
+ * Income is income. Existing rows with the same name are left alone.
+ */
+const PRESET_CATEGORY_GROUPS: readonly {
+  umbrella: string;
+  flow: Flow;
+  categories: readonly string[];
+}[] = [
+  {
+    umbrella: "Daily Expenses",
+    flow: "expense",
+    categories: ["Food", "Transportation", "Housing", "Utility"],
+  },
+  {
+    umbrella: "Special Expenses",
+    flow: "expense",
+    categories: [
+      "Electronics",
+      "Clothing",
+      "Subscription",
+      "Software Service",
+      "Shopping",
+      "Travel",
+    ],
+  },
+  {
+    umbrella: "Transfer",
+    flow: "transfer",
+    categories: ["Transfer"],
+  },
+  {
+    umbrella: "Income",
+    flow: "income",
+    categories: ["Salary", "Interest"],
+  },
+  {
+    umbrella: "Planning",
+    flow: "expense",
+    categories: ["Investment", "Insurance"],
+  },
+];
+
 /** A saved statement/document as stored in the `documents` table. */
 export interface DocumentRow {
   id: number;
@@ -56,7 +100,7 @@ export interface NewDocument {
 
 /** Debit = money out of the account, credit = money in. */
 export type TransactionType = "debit" | "credit";
-/** Semantic nature of a subcategory. */
+/** Semantic nature of a category: money in, money out, or a move between accounts. */
 export type Flow = "income" | "expense" | "transfer";
 /** Institution/product an account belongs to. */
 export type AccountType =
@@ -83,16 +127,18 @@ export const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
   ocbcCredit: "OCBC Credit",
 };
 
-export interface CategoryRow {
+/** A grouping that categories belong to. Transactions are not assigned here directly. */
+export interface UmbrellaCategoryRow {
   id: number;
   name: string;
 }
 
-export interface SubcategoryRow {
+/** A category assigned to transactions. Each one belongs to one umbrella category. */
+export interface CategoryRow {
   id: number;
   name: string;
   flow: Flow;
-  category_id: number;
+  umbrella_id: number;
 }
 
 export interface AccountRow {
@@ -119,24 +165,26 @@ export interface TransactionRow {
   amount: number;
   type: TransactionType;
   description: string;
-  subcategory_id: number | null;
+  category_id: number | null;
   account_id: number | null;
   /** The statement import these rows came from. */
   import_id: number;
   created_at: string;
-  /** Parent category of the assigned subcategory, when one is set. */
+  /** Assigned category, when one is set. */
   category_name: string | null;
+  /** Umbrella category of the assigned category, when one is set. */
+  umbrella_name: string | null;
   /** Account this transaction belongs to, when one is set. */
   account_name: string | null;
 }
 
-export interface NewCategory {
+export interface NewUmbrellaCategory {
   name: string;
 }
-export interface NewSubcategory {
+export interface NewCategory {
   name: string;
   flow: Flow;
-  categoryId: number;
+  umbrellaId: number;
 }
 export interface NewAccount {
   name: string;
@@ -147,7 +195,7 @@ export interface NewTransaction {
   amount: number;
   type: TransactionType;
   description?: string;
-  subcategoryId?: number | null;
+  categoryId?: number | null;
   accountId?: number | null;
   importId: number;
 }
@@ -160,6 +208,38 @@ export interface NewImport {
   pageCount: number;
   accountType: AccountType;
   transactions: Omit<NewTransaction, "importId">[];
+}
+
+/**
+ * A rule assigns one category to transactions that match it: every substring
+ * must appear in the description, the amount must fall in the inclusive range,
+ * and the direction must match.
+ */
+export interface RuleRow {
+  id: number;
+  /** Newline-separated substrings. Each one must appear in the description. */
+  substrings: string;
+  /** Inclusive lower bound, in cents. */
+  min_amount: number;
+  /** Inclusive upper bound, in cents. */
+  max_amount: number;
+  type: TransactionType;
+  /** Category this rule assigns. */
+  category_id: number;
+  /** Name of {@link category_id}. */
+  category_name: string;
+}
+
+export interface NewRule {
+  /** Newline-separated substrings, before or after trimming blank lines. */
+  substrings: string;
+  /** Inclusive lower bound, in cents. */
+  minAmount: number;
+  /** Inclusive upper bound, in cents. */
+  maxAmount: number;
+  type: TransactionType;
+  /** Category the rule assigns when a transaction matches. */
+  categoryId: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +255,7 @@ import sqlite3InitModule from ${JSON.stringify(SQLITE_WASM_URL)};
 
 const DB_PATH = ${JSON.stringify(DB_PATH)};
 const VFS_DIR = ${JSON.stringify(VFS_DIR)};
+const PRESET_CATEGORY_GROUPS = ${JSON.stringify(PRESET_CATEGORY_GROUPS)};
 
 let sqlite3, pool, db;
 
@@ -188,6 +269,48 @@ function lastId() {
   return id;
 }
 
+function tableExists(database, name) {
+  const rows = database.exec({
+    sql: "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name",
+    bind: { $name: name },
+    rowMode: "array",
+    returnValue: "resultRows",
+  });
+  return rows.length > 0;
+}
+
+function columnExists(database, table, column) {
+  return database
+    .exec({
+      sql: "PRAGMA table_info(" + table + ")",
+      rowMode: "object",
+      returnValue: "resultRows",
+    })
+    .some((c) => c.name === column);
+}
+
+function seedPresetCategories(database) {
+  for (const group of PRESET_CATEGORY_GROUPS) {
+    database.exec({
+      sql: "INSERT OR IGNORE INTO umbrella_categories (name) VALUES ($name)",
+      bind: { $name: group.umbrella },
+    });
+    const [[umbrellaId]] = database.exec({
+      sql: "SELECT id FROM umbrella_categories WHERE name = $name",
+      bind: { $name: group.umbrella },
+      rowMode: "array",
+      returnValue: "resultRows",
+    });
+    for (const name of group.categories) {
+      database.exec({
+        sql: \`INSERT OR IGNORE INTO categories (name, flow, umbrella_id)
+              VALUES ($name, $flow, $umbrellaId)\`,
+        bind: { $name: name, $flow: group.flow, $umbrellaId: umbrellaId },
+      });
+    }
+  }
+}
+
 function migrate(database) {
   // Enforce declared foreign keys. This PRAGMA is per-connection, so it must be
   // re-issued every time the database is (re)opened, including after a restore.
@@ -199,19 +322,6 @@ function migrate(database) {
       page_count INTEGER NOT NULL DEFAULT 0,
       text       TEXT    NOT NULL DEFAULT '',
       created_at TEXT    NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS categories (
-      id   INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT    NOT NULL UNIQUE
-    );
-
-    CREATE TABLE IF NOT EXISTS subcategories (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      name        TEXT    NOT NULL,
-      flow        TEXT    NOT NULL CHECK (flow IN ('income', 'expense', 'transfer')),
-      category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
-      UNIQUE (category_id, name)
     );
 
     CREATE TABLE IF NOT EXISTS accounts (
@@ -228,115 +338,224 @@ function migrate(database) {
       account_type TEXT    CHECK (account_type IN ('dbs', 'ocbc', 'uobCredit', 'paylah', 'ocbcCredit')),
       created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
     );
-
-    CREATE TABLE IF NOT EXISTS transactions (
-      id             INTEGER PRIMARY KEY AUTOINCREMENT,
-      date           TEXT    NOT NULL,                       -- ISO 'YYYY-MM-DD'
-      amount         INTEGER NOT NULL CHECK (amount >= 0),   -- cents; sign lives in "type"
-      type           TEXT    NOT NULL CHECK (type IN ('debit', 'credit')),
-      description    TEXT    NOT NULL DEFAULT '',
-      subcategory_id INTEGER REFERENCES subcategories(id) ON DELETE SET NULL,
-      account_id     INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
-      import_id      INTEGER NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
-      created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_transactions_date        ON transactions(date);
-    CREATE INDEX IF NOT EXISTS idx_transactions_account     ON transactions(account_id);
-    CREATE INDEX IF NOT EXISTS idx_transactions_subcategory ON transactions(subcategory_id);
   \`);
 
-  // Migration: older databases created \`account_id\` as NOT NULL. Transactions
-  // can now be saved without an account, so relax that constraint by rebuilding
-  // the table when the legacy shape is detected. SQLite can't ALTER a column's
-  // nullability in place, hence the copy-and-swap.
-  const accountCol = database
-    .exec({
-      sql: "PRAGMA table_info(transactions)",
-      rowMode: "object",
-      returnValue: "resultRows",
-    })
-    .find((c) => c.name === "account_id");
-  if (accountCol && accountCol.notnull) {
-    database.exec(\`
-      PRAGMA foreign_keys = OFF;
-      BEGIN;
-      CREATE TABLE transactions_new (
-        id             INTEGER PRIMARY KEY AUTOINCREMENT,
-        date           TEXT    NOT NULL,
-        amount         INTEGER NOT NULL CHECK (amount >= 0),
-        type           TEXT    NOT NULL CHECK (type IN ('debit', 'credit')),
-        description    TEXT    NOT NULL DEFAULT '',
-        subcategory_id INTEGER REFERENCES subcategories(id) ON DELETE SET NULL,
-        account_id     INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
-        created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
-      );
-      INSERT INTO transactions_new
-        SELECT id, date, amount, type, description, subcategory_id, account_id, created_at
-        FROM transactions;
-      DROP TABLE transactions;
-      ALTER TABLE transactions_new RENAME TO transactions;
-      COMMIT;
-      PRAGMA foreign_keys = ON;
+  // Databases from before categories were unified still have \`subcategories\`.
+  // Finish the older transaction-table rebuilds first (they still speak that
+  // schema), then rename: the old category becomes an umbrella category, and
+  // the old subcategory becomes the category a transaction points at.
+  if (tableExists(database, "subcategories")) {
+    // Migration: older databases created \`account_id\` as NOT NULL. Transactions
+    // can now be saved without an account, so relax that constraint by rebuilding
+    // the table when the legacy shape is detected. SQLite can't ALTER a column's
+    // nullability in place, hence the copy-and-swap.
+    const accountCol = database
+      .exec({
+        sql: "PRAGMA table_info(transactions)",
+        rowMode: "object",
+        returnValue: "resultRows",
+      })
+      .find((c) => c.name === "account_id");
+    if (accountCol && accountCol.notnull) {
+      database.exec(\`
+        PRAGMA foreign_keys = OFF;
+        BEGIN;
+        CREATE TABLE transactions_new (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          date           TEXT    NOT NULL,
+          amount         INTEGER NOT NULL CHECK (amount >= 0),
+          type           TEXT    NOT NULL CHECK (type IN ('debit', 'credit')),
+          description    TEXT    NOT NULL DEFAULT '',
+          subcategory_id INTEGER REFERENCES subcategories(id) ON DELETE SET NULL,
+          account_id     INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+          created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO transactions_new
+          SELECT id, date, amount, type, description, subcategory_id, account_id, created_at
+          FROM transactions;
+        DROP TABLE transactions;
+        ALTER TABLE transactions_new RENAME TO transactions;
+        COMMIT;
+        PRAGMA foreign_keys = ON;
 
-      CREATE INDEX IF NOT EXISTS idx_transactions_date        ON transactions(date);
-      CREATE INDEX IF NOT EXISTS idx_transactions_account     ON transactions(account_id);
-      CREATE INDEX IF NOT EXISTS idx_transactions_subcategory ON transactions(subcategory_id);
+        CREATE INDEX IF NOT EXISTS idx_transactions_date        ON transactions(date);
+        CREATE INDEX IF NOT EXISTS idx_transactions_account     ON transactions(account_id);
+        CREATE INDEX IF NOT EXISTS idx_transactions_subcategory ON transactions(subcategory_id);
+      \`);
+    }
+
+    // Migration: transactions used to stand alone. Every row now belongs to an
+    // import, so rebuild the table when \`import_id\` is missing. Rows saved before
+    // this column existed are attached to one sentinel import (there is no PDF
+    // hash for them).
+    const hasImportId = database
+      .exec({
+        sql: "PRAGMA table_info(transactions)",
+        rowMode: "object",
+        returnValue: "resultRows",
+      })
+      .some((c) => c.name === "import_id");
+    if (!hasImportId) {
+      database.exec(\`
+        PRAGMA foreign_keys = OFF;
+        BEGIN;
+        INSERT INTO imports (filename, file_hash)
+        SELECT '(before import tracking)', 'legacy'
+        WHERE EXISTS (SELECT 1 FROM transactions)
+          AND NOT EXISTS (SELECT 1 FROM imports WHERE file_hash = 'legacy');
+        CREATE TABLE transactions_new (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          date           TEXT    NOT NULL,
+          amount         INTEGER NOT NULL CHECK (amount >= 0),
+          type           TEXT    NOT NULL CHECK (type IN ('debit', 'credit')),
+          description    TEXT    NOT NULL DEFAULT '',
+          subcategory_id INTEGER REFERENCES subcategories(id) ON DELETE SET NULL,
+          account_id     INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+          import_id      INTEGER NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
+          created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO transactions_new
+          SELECT id, date, amount, type, description, subcategory_id, account_id,
+                 (SELECT id FROM imports WHERE file_hash = 'legacy'),
+                 created_at
+          FROM transactions;
+        DROP TABLE transactions;
+        ALTER TABLE transactions_new RENAME TO transactions;
+        COMMIT;
+        PRAGMA foreign_keys = ON;
+
+        CREATE INDEX IF NOT EXISTS idx_transactions_date        ON transactions(date);
+        CREATE INDEX IF NOT EXISTS idx_transactions_account     ON transactions(account_id);
+        CREATE INDEX IF NOT EXISTS idx_transactions_subcategory ON transactions(subcategory_id);
+        CREATE INDEX IF NOT EXISTS idx_transactions_import      ON transactions(import_id);
+      \`);
+    }
+
+    // Foreign keys stay on so SQLite rewrites references while renaming.
+    database.exec(\`
+      ALTER TABLE categories RENAME TO umbrella_categories;
+      ALTER TABLE subcategories RENAME TO categories;
+      ALTER TABLE categories RENAME COLUMN category_id TO umbrella_id;
+      ALTER TABLE transactions RENAME COLUMN subcategory_id TO category_id;
+      DROP INDEX IF EXISTS idx_transactions_subcategory;
     \`);
   }
 
-  // Migration: transactions used to stand alone. Every row now belongs to an
-  // import, so rebuild the table when \`import_id\` is missing. Rows saved before
-  // this column existed are attached to one sentinel import (there is no PDF
-  // hash for them).
-  const hasImportId = database
-    .exec({
-      sql: "PRAGMA table_info(transactions)",
-      rowMode: "object",
-      returnValue: "resultRows",
-    })
-    .some((c) => c.name === "import_id");
-  if (!hasImportId) {
-    database.exec(\`
-      PRAGMA foreign_keys = OFF;
-      BEGIN;
-      INSERT INTO imports (filename, file_hash)
-      SELECT '(before import tracking)', 'legacy'
-      WHERE EXISTS (SELECT 1 FROM transactions)
-        AND NOT EXISTS (SELECT 1 FROM imports WHERE file_hash = 'legacy');
-      CREATE TABLE transactions_new (
-        id             INTEGER PRIMARY KEY AUTOINCREMENT,
-        date           TEXT    NOT NULL,
-        amount         INTEGER NOT NULL CHECK (amount >= 0),
-        type           TEXT    NOT NULL CHECK (type IN ('debit', 'credit')),
-        description    TEXT    NOT NULL DEFAULT '',
-        subcategory_id INTEGER REFERENCES subcategories(id) ON DELETE SET NULL,
-        account_id     INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
-        import_id      INTEGER NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
-        created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
-      );
-      INSERT INTO transactions_new
-        SELECT id, date, amount, type, description, subcategory_id, account_id,
-               (SELECT id FROM imports WHERE file_hash = 'legacy'),
-               created_at
-        FROM transactions;
-      DROP TABLE transactions;
-      ALTER TABLE transactions_new RENAME TO transactions;
-      COMMIT;
-      PRAGMA foreign_keys = ON;
+  database.exec(\`
+    CREATE TABLE IF NOT EXISTS umbrella_categories (
+      id   INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT    NOT NULL UNIQUE
+    );
 
-      CREATE INDEX IF NOT EXISTS idx_transactions_date        ON transactions(date);
-      CREATE INDEX IF NOT EXISTS idx_transactions_account     ON transactions(account_id);
-      CREATE INDEX IF NOT EXISTS idx_transactions_subcategory ON transactions(subcategory_id);
-      CREATE INDEX IF NOT EXISTS idx_transactions_import      ON transactions(import_id);
-    \`);
+    CREATE TABLE IF NOT EXISTS categories (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT    NOT NULL,
+      flow        TEXT    NOT NULL CHECK (flow IN ('income', 'expense', 'transfer')),
+      umbrella_id INTEGER NOT NULL REFERENCES umbrella_categories(id) ON DELETE CASCADE,
+      UNIQUE (umbrella_id, name)
+    );
+
+    CREATE TABLE IF NOT EXISTS transactions (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      date        TEXT    NOT NULL,                       -- ISO 'YYYY-MM-DD'
+      amount      INTEGER NOT NULL CHECK (amount >= 0),   -- cents; sign lives in "type"
+      type        TEXT    NOT NULL CHECK (type IN ('debit', 'credit')),
+      description TEXT    NOT NULL DEFAULT '',
+      category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+      account_id  INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+      import_id   INTEGER NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
+      created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_transactions_date     ON transactions(date);
+    CREATE INDEX IF NOT EXISTS idx_transactions_account  ON transactions(account_id);
+    CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(category_id);
+    CREATE INDEX IF NOT EXISTS idx_transactions_import   ON transactions(import_id);
+  \`);
+
+  // A rule exists to assign a category. Rows saved before that link have no
+  // category to point at, so the table is replaced rather than altered.
+  if (tableExists(database, "rules") && !columnExists(database, "rules", "category_id")) {
+    database.exec("DROP TABLE rules;");
   }
 
-  // Created after the migration above: older databases don't have \`import_id\`
-  // until that rebuild finishes, so this index can't live in the initial batch.
-  database.exec(
-    "CREATE INDEX IF NOT EXISTS idx_transactions_import ON transactions(import_id);",
-  );
+  database.exec(\`
+    CREATE TABLE IF NOT EXISTS rules (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      substrings  TEXT    NOT NULL,                         -- newline-separated; each must be present
+      min_amount  INTEGER NOT NULL CHECK (min_amount >= 0), -- inclusive cents
+      max_amount  INTEGER NOT NULL CHECK (max_amount >= 0), -- inclusive cents
+      type        TEXT    NOT NULL CHECK (type IN ('debit', 'credit')),
+      category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+      CHECK (min_amount <= max_amount)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_rules_category ON rules(category_id);
+  \`);
+
+  seedPresetCategories(database);
+}
+
+/** Drop blank lines and surrounding space. Every remaining line must be present. */
+function normalizeSubstrings(raw) {
+  const lines = String(raw ?? "")
+    .split(/\\r?\\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length === 0) {
+    throw new Error("Enter at least one substring, one per line.");
+  }
+  return lines.join("\\n");
+}
+
+function requireCents(value, label) {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(label + " must be zero or more.");
+  }
+  return value;
+}
+
+function bindRule(rule) {
+  const substrings = normalizeSubstrings(rule.substrings);
+  const minAmount = requireCents(rule.minAmount, "Minimum amount");
+  const maxAmount = requireCents(rule.maxAmount, "Maximum amount");
+  if (minAmount > maxAmount) {
+    throw new Error("Minimum amount cannot be greater than the maximum.");
+  }
+  if (rule.type !== "debit" && rule.type !== "credit") {
+    throw new Error("Choose debit or credit.");
+  }
+  const categoryId = rule.categoryId;
+  if (!Number.isInteger(categoryId) || categoryId <= 0) {
+    throw new Error("Choose a category.");
+  }
+  const category = db.exec({
+    sql: "SELECT name FROM categories WHERE id = $id",
+    bind: { $id: categoryId },
+    rowMode: "object",
+    returnValue: "resultRows",
+  })[0];
+  if (!category) throw new Error("Category not found.");
+  return {
+    substrings,
+    minAmount,
+    maxAmount,
+    type: rule.type,
+    categoryId,
+    categoryName: category.name,
+  };
+}
+
+function storedRule(id, bound) {
+  return {
+    id,
+    substrings: bound.substrings,
+    min_amount: bound.minAmount,
+    max_amount: bound.maxAmount,
+    type: bound.type,
+    category_id: bound.categoryId,
+    category_name: bound.categoryName,
+  };
 }
 
 const ready = (async () => {
@@ -361,30 +580,30 @@ const handlers = {
     });
     return lastId();
   },
+  insertUmbrellaCategory(cat) {
+    db.exec({
+      sql: "INSERT INTO umbrella_categories (name) VALUES ($name)",
+      bind: { $name: cat.name },
+    });
+    return lastId();
+  },
+  listUmbrellaCategories() {
+    return db.exec({
+      sql: "SELECT id, name FROM umbrella_categories ORDER BY name",
+      rowMode: "object",
+      returnValue: "resultRows",
+    });
+  },
   insertCategory(cat) {
     db.exec({
-      sql: "INSERT INTO categories (name) VALUES ($name)",
-      bind: { $name: cat.name },
+      sql: "INSERT INTO categories (name, flow, umbrella_id) VALUES ($name, $flow, $umbrellaId)",
+      bind: { $name: cat.name, $flow: cat.flow, $umbrellaId: cat.umbrellaId },
     });
     return lastId();
   },
   listCategories() {
     return db.exec({
-      sql: "SELECT id, name FROM categories ORDER BY name",
-      rowMode: "object",
-      returnValue: "resultRows",
-    });
-  },
-  insertSubcategory(sub) {
-    db.exec({
-      sql: "INSERT INTO subcategories (name, flow, category_id) VALUES ($name, $flow, $categoryId)",
-      bind: { $name: sub.name, $flow: sub.flow, $categoryId: sub.categoryId },
-    });
-    return lastId();
-  },
-  listSubcategories() {
-    return db.exec({
-      sql: "SELECT id, name, flow, category_id FROM subcategories ORDER BY name",
+      sql: "SELECT id, name, flow, umbrella_id FROM categories ORDER BY name",
       rowMode: "object",
       returnValue: "resultRows",
     });
@@ -402,6 +621,72 @@ const handlers = {
       rowMode: "object",
       returnValue: "resultRows",
     });
+  },
+  insertRule(rule) {
+    const bound = bindRule(rule);
+    db.exec({
+      sql: \`INSERT INTO rules (substrings, min_amount, max_amount, type, category_id)
+            VALUES ($substrings, $minAmount, $maxAmount, $type, $categoryId)\`,
+      bind: {
+        $substrings: bound.substrings,
+        $minAmount: bound.minAmount,
+        $maxAmount: bound.maxAmount,
+        $type: bound.type,
+        $categoryId: bound.categoryId,
+      },
+    });
+    return storedRule(lastId(), bound);
+  },
+  listRules() {
+    return db.exec({
+      sql: \`SELECT r.id, r.substrings, r.min_amount, r.max_amount, r.type,
+                   r.category_id, c.name AS category_name
+            FROM rules r
+            JOIN categories c ON c.id = r.category_id
+            ORDER BY r.id\`,
+      rowMode: "object",
+      returnValue: "resultRows",
+    });
+  },
+  updateRule(rule) {
+    const bound = bindRule(rule);
+    db.exec({
+      sql: \`UPDATE rules
+            SET substrings = $substrings,
+                min_amount = $minAmount,
+                max_amount = $maxAmount,
+                type = $type,
+                category_id = $categoryId
+            WHERE id = $id\`,
+      bind: {
+        $substrings: bound.substrings,
+        $minAmount: bound.minAmount,
+        $maxAmount: bound.maxAmount,
+        $type: bound.type,
+        $categoryId: bound.categoryId,
+        $id: rule.id,
+      },
+    });
+    const [[changes]] = db.exec({
+      sql: "SELECT changes()",
+      rowMode: "array",
+      returnValue: "resultRows",
+    });
+    if (!changes) throw new Error("Rule not found.");
+    return storedRule(rule.id, bound);
+  },
+  deleteRule(id) {
+    db.exec({
+      sql: "DELETE FROM rules WHERE id = $id",
+      bind: { $id: id },
+    });
+    const [[changes]] = db.exec({
+      sql: "SELECT changes()",
+      rowMode: "array",
+      returnValue: "resultRows",
+    });
+    if (!changes) throw new Error("Rule not found.");
+    return null;
   },
   renameAccount(acc) {
     const name = String(acc.name ?? "").trim();
@@ -475,14 +760,14 @@ const handlers = {
       for (const txn of imp.transactions) {
         db.exec({
           sql: \`INSERT INTO transactions
-                  (date, amount, type, description, subcategory_id, account_id, import_id)
-                VALUES ($date, $amount, $type, $description, $subcategoryId, $accountId, $importId)\`,
+                  (date, amount, type, description, category_id, account_id, import_id)
+                VALUES ($date, $amount, $type, $description, $categoryId, $accountId, $importId)\`,
           bind: {
             $date: txn.date,
             $amount: txn.amount,
             $type: txn.type,
             $description: txn.description ?? "",
-            $subcategoryId: txn.subcategoryId ?? null,
+            $categoryId: txn.categoryId ?? null,
             $accountId: txn.accountId ?? null,
             $importId: importId,
           },
@@ -498,14 +783,14 @@ const handlers = {
   insertTransaction(txn) {
     db.exec({
       sql: \`INSERT INTO transactions
-              (date, amount, type, description, subcategory_id, account_id, import_id)
-            VALUES ($date, $amount, $type, $description, $subcategoryId, $accountId, $importId)\`,
+              (date, amount, type, description, category_id, account_id, import_id)
+            VALUES ($date, $amount, $type, $description, $categoryId, $accountId, $importId)\`,
       bind: {
         $date: txn.date,
         $amount: txn.amount,
         $type: txn.type,
         $description: txn.description ?? "",
-        $subcategoryId: txn.subcategoryId ?? null,
+        $categoryId: txn.categoryId ?? null,
         $accountId: txn.accountId ?? null,
         $importId: txn.importId,
       },
@@ -515,12 +800,13 @@ const handlers = {
   listTransactions() {
     return db.exec({
       sql: \`SELECT t.id, t.date, t.amount, t.type, t.description,
-                   t.subcategory_id, t.account_id, t.import_id, t.created_at,
+                   t.category_id, t.account_id, t.import_id, t.created_at,
                    c.name AS category_name,
+                   u.name AS umbrella_name,
                    a.name AS account_name
             FROM transactions t
-            LEFT JOIN subcategories s ON s.id = t.subcategory_id
-            LEFT JOIN categories c ON c.id = s.category_id
+            LEFT JOIN categories c ON c.id = t.category_id
+            LEFT JOIN umbrella_categories u ON u.id = c.umbrella_id
             LEFT JOIN accounts a ON a.id = t.account_id
             ORDER BY t.date DESC, t.id DESC\`,
       rowMode: "object",
@@ -557,6 +843,22 @@ const handlers = {
       db = new pool.OpfsSAHPoolDb(DB_PATH);
       migrate(db);
     }
+    return null;
+  },
+  resetDatabase() {
+    db.exec("PRAGMA foreign_keys = OFF;");
+    for (const table of [
+      "rules",
+      "transactions",
+      "categories",
+      "umbrella_categories",
+      "imports",
+      "accounts",
+      "documents",
+    ]) {
+      db.exec("DROP TABLE IF EXISTS " + table);
+    }
+    migrate(db);
     return null;
   },
 };
@@ -678,7 +980,21 @@ export async function insertDocument(doc: NewDocument): Promise<number> {
   return client.call<number>("insertDocument", [doc]);
 }
 
-/** Insert a category and return its new row id. */
+/** Insert an umbrella category and return its new row id. */
+export async function insertUmbrellaCategory(
+  cat: NewUmbrellaCategory,
+): Promise<number> {
+  const client = await getClient();
+  return client.call<number>("insertUmbrellaCategory", [cat]);
+}
+
+/** Return all umbrella categories, alphabetically. */
+export async function listUmbrellaCategories(): Promise<UmbrellaCategoryRow[]> {
+  const client = await getClient();
+  return client.call<UmbrellaCategoryRow[]>("listUmbrellaCategories");
+}
+
+/** Insert a category under an umbrella category and return its new row id. */
 export async function insertCategory(cat: NewCategory): Promise<number> {
   const client = await getClient();
   return client.call<number>("insertCategory", [cat]);
@@ -688,18 +1004,6 @@ export async function insertCategory(cat: NewCategory): Promise<number> {
 export async function listCategories(): Promise<CategoryRow[]> {
   const client = await getClient();
   return client.call<CategoryRow[]>("listCategories");
-}
-
-/** Insert a subcategory and return its new row id. */
-export async function insertSubcategory(sub: NewSubcategory): Promise<number> {
-  const client = await getClient();
-  return client.call<number>("insertSubcategory", [sub]);
-}
-
-/** Return all subcategories, alphabetically. */
-export async function listSubcategories(): Promise<SubcategoryRow[]> {
-  const client = await getClient();
-  return client.call<SubcategoryRow[]>("listSubcategories");
 }
 
 /** Insert an account and return its new row id. */
@@ -712,6 +1016,30 @@ export async function insertAccount(acc: NewAccount): Promise<number> {
 export async function listAccounts(): Promise<AccountRow[]> {
   const client = await getClient();
   return client.call<AccountRow[]>("listAccounts");
+}
+
+/** Insert a rule and return the stored row (amounts in cents). */
+export async function insertRule(rule: NewRule): Promise<RuleRow> {
+  const client = await getClient();
+  return client.call<RuleRow>("insertRule", [rule]);
+}
+
+/** Return all rules, oldest first. */
+export async function listRules(): Promise<RuleRow[]> {
+  const client = await getClient();
+  return client.call<RuleRow[]>("listRules");
+}
+
+/** Replace a rule's match criteria and the category it assigns. Returns the stored row. */
+export async function updateRule(id: number, rule: NewRule): Promise<RuleRow> {
+  const client = await getClient();
+  return client.call<RuleRow>("updateRule", [{ id, ...rule }]);
+}
+
+/** Delete a rule. */
+export async function deleteRule(id: number): Promise<void> {
+  const client = await getClient();
+  await client.call<null>("deleteRule", [id]);
 }
 
 /** Rename an account. Returns the stored name. */
@@ -791,4 +1119,13 @@ export async function importDatabase(
   // Transfer the buffer to the worker to avoid copying the whole DB.
   const buffer = bytes instanceof Uint8Array ? bytes.buffer : bytes;
   await client.call<null>("importDatabase", [bytes], [buffer as ArrayBuffer]);
+}
+
+/**
+ * Delete every saved row and recreate the schema. Preset categories are seeded
+ * again by the same startup migration.
+ */
+export async function resetDatabase(): Promise<void> {
+  const client = await getClient();
+  await client.call<null>("resetDatabase");
 }
