@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type {
   CategoryRow,
   RuleRow,
@@ -69,6 +69,7 @@ export default function RulesPage() {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [running, setRunning] = useState(false);
   const [runMessage, setRunMessage] = useState("");
+  const editorRef = useRef<HTMLElement>(null);
 
   const categoryGroups = useMemo(() => {
     const byUmbrella = new Map<number, CategoryRow[]>();
@@ -185,6 +186,7 @@ export default function RulesPage() {
     setCategoryId(String(rule.category_id));
     setFormError("");
     setListError("");
+    editorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   async function handleDelete(rule: RuleRow) {
@@ -229,7 +231,10 @@ export default function RulesPage() {
 
   return (
     <main className="mx-auto flex max-w-6xl flex-col gap-8 px-6 py-12">
-      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+      <section
+        ref={editorRef}
+        className="flex scroll-mt-6 flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900"
+      >
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
           {editingId === null ? "New rule" : "Edit rule"}
         </h2>

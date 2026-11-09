@@ -159,13 +159,16 @@ export default function ReportsPage() {
     });
     groups.sort((a, b) => a.name.localeCompare(b.name));
 
+    const summary = FLOW_SUMMARY.map((item) => ({
+      ...item,
+      cents: flowTotals[item.flow],
+    }));
+
     return {
       groups,
       unclassified,
-      summary: FLOW_SUMMARY.map((item) => ({
-        ...item,
-        cents: flowTotals[item.flow],
-      })),
+      summary,
+      total: summary.reduce((sum, item) => sum + item.cents, 0) + unclassified,
     };
   }, [categories, selected, transactions, umbrellas]);
 
@@ -202,7 +205,7 @@ export default function ReportsPage() {
 
         {loaded && (
           <>
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {report.summary.map((item) => (
                 <div
                   key={item.flow}
@@ -216,6 +219,21 @@ export default function ReportsPage() {
                   </p>
                 </div>
               ))}
+              <div className="rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+                <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                  Unclassified
+                </p>
+                <p className={`mt-1 text-lg font-semibold ${amountClass(report.unclassified)}`}>
+                  {formatSigned(report.unclassified)}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Total</p>
+              <p className={`text-lg font-semibold ${amountClass(report.total)}`}>
+                {formatSigned(report.total)}
+              </p>
             </div>
 
             <div className="overflow-x-auto rounded-md border border-zinc-200 dark:border-zinc-800">
