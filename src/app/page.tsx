@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { TransactionRow } from "@/lib/db";
+import type { CategoryRow, TransactionRow, UmbrellaCategoryRow } from "@/lib/db";
 
 const PAGE_SIZE = 200;
 const NONE = "none";
@@ -13,6 +13,8 @@ const money = new Intl.NumberFormat("en-SG", {
 
 const fieldClass =
   "rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950";
+const rowSelectClass =
+  "max-w-44 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-950";
 
 function formatMonth(yearMonth: string): string {
   const [year, month] = yearMonth.split("-").map(Number);
@@ -56,14 +58,29 @@ export default function TransactionsPage() {
   const [month, setMonth] = useState("");
   const [category, setCategory] = useState("");
   const [account, setAccount] = useState("");
+  const [categories, setCategories] = useState<CategoryRow[]>([]);
+  const [umbrellas, setUmbrellas] = useState<UmbrellaCategoryRow[]>([]);
+  const [assignCategory, setAssignCategory] = useState("");
+  const [categorizing, setCategorizing] = useState(false);
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const { listTransactions } = await import("@/lib/db");
-        const transactions = await listTransactions();
-        if (!cancelled) setRows(transactions);
+        const { listCategories, listTransactions, listUmbrellaCategories } = await import(
+          "@/lib/db"
+        );
+        const [transactions, loadedCategories, loadedUmbrellas] = await Promise.all([
+          listTransactions(),
+          listCategories(),
+          listUmbrellaCategories(),
+        ]);
+        if (!cancelled) {
+          setRows(transactions);
+          setCategories(loadedCategories);
+          setUmbrellas(loadedUmbrellas);
+        }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
@@ -78,13 +95,30 @@ export default function TransactionsPage() {
     return [...new Set(rows.map((t) => t.date.slice(0, 7)))].sort().reverse();
   }, [rows]);
 
-  const categories = useMemo(
+  const categoryFilters = useMemo(
     () =>
       rows
         ? uniqueOptions(rows, (t) => t.category_id, (t) => t.category_name, "Uncategorized")
         : [],
     [rows],
   );
+
+  const categoryGroups = useMemo(() => {
+    const byUmbrella = new Map<number, CategoryRow[]>();
+    for (const item of categories) {
+      const group = byUmbrella.get(item.umbrella_id) ?? [];
+      group.push(item);
+      byUmbrella.set(item.umbrella_id, group);
+    }
+    const umbrellaName = new Map(umbrellas.map((row) => [row.id, row.name]));
+    return [...byUmbrella.entries()]
+      .map(([id, items]) => ({
+        id,
+        name: umbrellaName.get(id) ?? "Ungrouped",
+        items,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [categories, umbrellas]);
 
   const accounts = useMemo(
     () =>
@@ -157,6 +191,68 @@ export default function TransactionsPage() {
       }
       return next;
     });
+  }
+
+  async function assignTo(ids: number[], categoryId: number | null): Promise<boolean> {
+    if (ids.length === 0) return false;
+    setCategorizing(true);
+    setError("");
+    setNotice("");
+    const previous = rows;
+    const before = new Map((rows ?? []).map((t) => [t.id, t.category_id]));
+    const chosen = categories.find((item) => item.id === categoryId);
+    const umbrella = umbrellas.find((item) => item.id === chosen?.umbrella_id);
+    const idSet = new Set(ids);
+    if (categoryId == null || chosen) {
+      setRows(
+        (current) =>
+          current?.map((t) => {
+            if (!idSet.has(t.id)) return t;
+            if (categoryId == null) {
+              return { ...t, category_id: null, category_name: null, umbrella_name: null };
+            }
+            return {
+              ...t,
+              category_id: categoryId,
+              category_name: chosen?.name ?? t.category_name,
+              umbrella_name: umbrella?.name ?? null,
+            };
+          }) ?? current,
+      );
+    }
+    try {
+      const { categorizeTransactions } = await import("@/lib/db");
+      const next = await categorizeTransactions(ids, categoryId);
+      setRows(next);
+      const changed = next.filter((t) => before.get(t.id) !== t.category_id).length;
+      if (categoryId == null) {
+        setNotice(
+          changed === 1
+            ? "Cleared the category on 1 transaction."
+            : `Cleared the category on ${changed} transactions.`,
+        );
+      } else {
+        const name = chosen?.name ?? "that category";
+        const countLabel = changed === 1 ? "1 transaction" : `${changed} transactions`;
+        setNotice(
+          `Categorized ${countLabel}. Each full description was saved under ${name}.`,
+        );
+      }
+      return true;
+    } catch (e) {
+      setRows(previous);
+      setError(e instanceof Error ? e.message : String(e));
+      return false;
+    } finally {
+      setCategorizing(false);
+    }
+  }
+
+  async function handleAssignSelected() {
+    const categoryId = Number(assignCategory);
+    if (!Number.isInteger(categoryId) || categoryId <= 0) return;
+    const ok = await assignTo([...selected], categoryId);
+    if (ok) setSelected(new Set());
   }
 
   async function handleDelete() {
@@ -233,7 +329,7 @@ export default function TransactionsPage() {
                   className={fieldClass}
                 >
                   <option value="">All categories</option>
-                  {categories.map(([value, label]) => (
+                  {categoryFilters.map(([value, label]) => (
                     <option key={value} value={value}>
                       {label}
                     </option>
@@ -278,17 +374,55 @@ export default function TransactionsPage() {
               <p className="text-sm text-zinc-600 dark:text-zinc-400">
                 Showing {rangeStart}–{rangeEnd} of {filtered.length}
               </p>
-              <button
-                type="button"
-                onClick={handleDelete}
-                disabled={selected.size === 0 || deleting}
-                className="rounded-md border border-red-300 px-3 py-1.5 text-xs font-medium text-red-700 disabled:opacity-40 dark:border-red-800 dark:text-red-400"
-              >
-                {deleting
-                  ? "Deleting…"
-                  : `Delete selected${selected.size > 0 ? ` (${selected.size})` : ""}`}
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={assignCategory}
+                  onChange={(e) => setAssignCategory(e.target.value)}
+                  disabled={categorizing || categories.length === 0}
+                  aria-label="Category for selected transactions"
+                  className={fieldClass}
+                >
+                  <option value="">Choose a category</option>
+                  {categoryGroups.map((group) => (
+                    <optgroup key={group.id} label={group.name}>
+                      {group.items.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => void handleAssignSelected()}
+                  disabled={
+                    selected.size === 0 ||
+                    !assignCategory ||
+                    categorizing ||
+                    deleting
+                  }
+                  className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+                >
+                  {categorizing
+                    ? "Categorizing…"
+                    : `Categorize selected${selected.size > 0 ? ` (${selected.size})` : ""}`}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  disabled={selected.size === 0 || deleting || categorizing}
+                  className="rounded-md border border-red-300 px-3 py-1.5 text-xs font-medium text-red-700 disabled:opacity-40 dark:border-red-800 dark:text-red-400"
+                >
+                  {deleting
+                    ? "Deleting…"
+                    : `Delete selected${selected.size > 0 ? ` (${selected.size})` : ""}`}
+                </button>
+              </div>
             </div>
+            {notice && (
+              <p className="text-sm text-zinc-600 dark:text-zinc-400">{notice}</p>
+            )}
             <div className="overflow-x-auto rounded-md border border-zinc-200 dark:border-zinc-800">
             <table className="w-full border-collapse text-sm">
               <thead>
@@ -308,7 +442,6 @@ export default function TransactionsPage() {
                   <th className="px-2 py-1">Description</th>
                   <th className="px-2 py-1 text-right">Amount</th>
                   <th className="px-2 py-1">Category</th>
-                  <th className="px-2 py-1">Umbrella</th>
                   <th className="px-2 py-1">Account</th>
                 </tr>
               </thead>
@@ -336,11 +469,31 @@ export default function TransactionsPage() {
                     >
                       {formatAmount(t.amount, t.type)}
                     </td>
-                    <td className="whitespace-nowrap px-2 py-1 align-top">
-                      {t.category_name ?? ""}
-                    </td>
-                    <td className="whitespace-nowrap px-2 py-1 align-top">
-                      {t.umbrella_name ?? ""}
+                    <td className="px-2 py-1 align-top">
+                      <select
+                        value={t.category_id ?? ""}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          void assignTo(
+                            [t.id],
+                            value ? Number(value) : null,
+                          );
+                        }}
+                        disabled={categorizing || deleting}
+                        aria-label={`Category for ${t.description || t.date}`}
+                        className={rowSelectClass}
+                      >
+                        <option value="">Uncategorized</option>
+                        {categoryGroups.map((group) => (
+                          <optgroup key={group.id} label={group.name}>
+                            {group.items.map((item) => (
+                              <option key={item.id} value={item.id}>
+                                {item.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
                     </td>
                     <td className="whitespace-nowrap px-2 py-1 align-top">
                       {t.account_name ?? ""}

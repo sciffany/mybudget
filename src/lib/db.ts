@@ -55,6 +55,7 @@ const PRESET_CATEGORY_GROUPS: readonly {
     categories: [
       "Electronics",
       "Clothing",
+      "Donation",
       "Subscription",
       "Software Service",
       "Shopping",
@@ -84,8 +85,9 @@ const PRESET_CATEGORY_GROUPS: readonly {
  * when its description contains any substring (ignoring letter case), the
  * amount falls in the range, and the direction matches. Income categories are
  * credits; the rest are debits. The range covers any amount. Substrings from
- * this list that are missing on an existing preset rule are appended. Other
- * edits stay in place. A deleted preset is created again.
+ * this list that are missing on an existing preset rule are appended, unless
+ * that substring already belongs to another category. Other edits stay in
+ * place. A deleted preset is created again.
  */
 const PRESET_RULE_MIN_CENTS = 0;
 const PRESET_RULE_MAX_CENTS = 99_999_999_99;
@@ -164,7 +166,7 @@ const PRESET_RULES: readonly {
     umbrella: "Special Expenses",
     category: "Software Service",
     type: "debit",
-    substrings: ["Google", "Vercel"],
+    substrings: ["Google", "Vercel", "Heroku"],
   },
   {
     key: "housing",
@@ -174,11 +176,25 @@ const PRESET_RULES: readonly {
     substrings: ["Rent", "Mortgage"],
   },
   {
+    key: "utility",
+    umbrella: "Daily Expenses",
+    category: "Utility",
+    type: "debit",
+    substrings: ["Giga", "Singtel", "Starhub"],
+  },
+  {
     key: "enrichment",
     umbrella: "Special Expenses",
     category: "Enrichment",
     type: "debit",
     substrings: ["Italki", "Duolingo"],
+  },
+  {
+    key: "travel",
+    umbrella: "Special Expenses",
+    category: "Travel",
+    type: "debit",
+    substrings: ["Klook", "Trip.com"],
   },
 ];
 
@@ -514,6 +530,7 @@ function seedPresetRules(database) {
     for (const needle of preset.substrings) {
       const key = String(needle).trim().toLowerCase();
       if (!key || seen.has(key)) continue;
+      if (substringUsedElsewhere(database, key, existing[0].id)) continue;
       seen.add(key);
       added.push(String(needle).trim());
     }
@@ -559,6 +576,137 @@ function categoryIdForTransaction(database, description, amount, type) {
     }
   }
   return best ? best.categoryId : null;
+}
+
+/**
+ * Full-range rule for this category and direction. Preset rules are preferred.
+ * Descriptions learned from categorizing a transaction are stored here so any
+ * amount can match.
+ */
+function learnedRule(database, categoryId, type) {
+  const rows = database.exec({
+    sql: \`SELECT id, substrings, preset_key
+          FROM rules
+          WHERE category_id = $categoryId
+            AND type = $type
+            AND min_amount = $minAmount
+            AND max_amount = $maxAmount
+          ORDER BY preset_key IS NULL, id\`,
+    bind: {
+      $categoryId: categoryId,
+      $type: type,
+      $minAmount: PRESET_RULE_MIN_CENTS,
+      $maxAmount: PRESET_RULE_MAX_CENTS,
+    },
+    rowMode: "object",
+    returnValue: "resultRows",
+  });
+  return rows[0] ?? null;
+}
+
+/** One description becomes one substring line. Blank descriptions are skipped. */
+function descriptionNeedles(descriptions) {
+  const needles = [];
+  const seen = new Set();
+  for (const raw of descriptions) {
+    const line = String(raw ?? "").replace(/[\\r\\n]+/g, " ").trim();
+    const key = line.toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    needles.push(line);
+  }
+  return needles;
+}
+
+/** True when some other rule already lists this substring, ignoring letter case. */
+function substringUsedElsewhere(database, key, ruleId) {
+  const rules = database.exec({
+    sql: "SELECT id, substrings FROM rules WHERE id != $id",
+    bind: { $id: ruleId },
+    rowMode: "object",
+    returnValue: "resultRows",
+  });
+  for (const rule of rules) {
+    for (const line of String(rule.substrings).split(/\\r?\\n/)) {
+      if (line.trim().toLowerCase() === key) return true;
+    }
+  }
+  return false;
+}
+
+/** Drop this exact substring from every rule except the one that now owns it. */
+function removeExactSubstring(database, exceptId, key) {
+  const rules = database.exec({
+    sql: "SELECT id, substrings, preset_key FROM rules WHERE id != $id",
+    bind: { $id: exceptId },
+    rowMode: "object",
+    returnValue: "resultRows",
+  });
+  for (const rule of rules) {
+    const lines = String(rule.substrings)
+      .split(/\\r?\\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const kept = lines.filter((line) => line.toLowerCase() !== key);
+    if (kept.length === lines.length) continue;
+    if (kept.length === 0 && rule.preset_key == null) {
+      database.exec({
+        sql: "DELETE FROM rules WHERE id = $id",
+        bind: { $id: rule.id },
+      });
+      continue;
+    }
+    database.exec({
+      sql: "UPDATE rules SET substrings = $substrings WHERE id = $id",
+      bind: { $substrings: kept.join("\\n"), $id: rule.id },
+    });
+  }
+}
+
+/** Add each full description as a substring of the category's matching rule. */
+function rememberDescriptions(database, categoryId, type, descriptions) {
+  const needles = descriptionNeedles(descriptions);
+  if (needles.length === 0) return;
+  const existing = learnedRule(database, categoryId, type);
+  let ruleId;
+  if (!existing) {
+    database.exec({
+      sql: \`INSERT INTO rules
+              (substrings, min_amount, max_amount, type, category_id)
+            VALUES ($substrings, $minAmount, $maxAmount, $type, $categoryId)\`,
+      bind: {
+        $substrings: needles.join("\\n"),
+        $minAmount: PRESET_RULE_MIN_CENTS,
+        $maxAmount: PRESET_RULE_MAX_CENTS,
+        $type: type,
+        $categoryId: categoryId,
+      },
+    });
+    ruleId = lastId();
+  } else {
+    ruleId = existing.id;
+    const current = String(existing.substrings);
+    const have = new Set(
+      current
+        .split(/\\r?\\n/)
+        .map((line) => line.trim().toLowerCase())
+        .filter(Boolean),
+    );
+    const added = needles.filter((needle) => !have.has(needle.toLowerCase()));
+    if (added.length > 0) {
+      const base = current.replace(/\\s+$/, "");
+      database.exec({
+        sql: "UPDATE rules SET substrings = $substrings WHERE id = $id",
+        bind: {
+          $substrings: base ? base + "\\n" + added.join("\\n") : added.join("\\n"),
+          $id: ruleId,
+        },
+      });
+    }
+  }
+  for (const needle of needles) {
+    removeExactSubstring(database, ruleId, needle.toLowerCase());
+  }
 }
 
 /** Assign a category to every uncategorized transaction a rule matches. Returns how many were updated. */
@@ -1116,6 +1264,64 @@ const handlers = {
   runRules() {
     return classifyUncategorized(db);
   },
+  /**
+   * Assign \`categoryId\` to the given transactions. Each description is saved
+   * in full as a substring of that category, then other uncategorized
+   * transactions are categorized from the rules. Pass a null category to clear
+   * the selection without learning a description.
+   */
+  categorizeTransactions(payload) {
+    const ids = [];
+    const seen = new Set();
+    if (!payload || !Array.isArray(payload.ids) || payload.ids.length === 0) {
+      throw new Error("Choose at least one transaction.");
+    }
+    for (const raw of payload.ids) {
+      const id = typeof raw === "number" ? raw : Number(raw);
+      if (!Number.isInteger(id) || id <= 0 || seen.has(id)) {
+        if (!Number.isInteger(id) || id <= 0) throw new Error("Transaction not found.");
+        continue;
+      }
+      seen.add(id);
+      ids.push(id);
+    }
+    const clear = payload.categoryId == null || payload.categoryId === "";
+    let categoryId = null;
+    if (!clear) {
+      categoryId = typeof payload.categoryId === "number"
+        ? payload.categoryId
+        : Number(payload.categoryId);
+      categoryById(categoryId);
+    }
+    db.exec("BEGIN");
+    try {
+      const byType = { debit: [], credit: [] };
+      for (const id of ids) {
+        const row = db.exec({
+          sql: "SELECT id, description, type FROM transactions WHERE id = $id",
+          bind: { $id: id },
+          rowMode: "object",
+          returnValue: "resultRows",
+        })[0];
+        if (!row) throw new Error("Transaction not found.");
+        db.exec({
+          sql: "UPDATE transactions SET category_id = $categoryId WHERE id = $id",
+          bind: { $categoryId: categoryId, $id: id },
+        });
+        if (categoryId != null) byType[row.type].push(row.description);
+      }
+      if (categoryId != null) {
+        rememberDescriptions(db, categoryId, "debit", byType.debit);
+        rememberDescriptions(db, categoryId, "credit", byType.credit);
+        classifyUncategorized(db);
+      }
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+    return handlers.listTransactions();
+  },
   deleteRule(id) {
     db.exec({
       sql: "DELETE FROM rules WHERE id = $id",
@@ -1341,9 +1547,14 @@ function assertBrowser() {
 // is genuinely unavailable there.
 function assertEnvironment() {
   if (typeof Worker === "undefined") {
-    throw new Error("This browser doesn't support Web Workers, which MyBudget needs.");
+    throw new Error(
+      "This browser doesn't support Web Workers, which MyBudget needs.",
+    );
   }
-  if (!window.isSecureContext || typeof navigator?.storage?.getDirectory !== "function") {
+  if (
+    !window.isSecureContext ||
+    typeof navigator?.storage?.getDirectory !== "function"
+  ) {
     throw new Error(
       "Local storage (OPFS) is unavailable here. Open the app over https:// " +
         "or http://localhost (not a file:// path, LAN IP, or private window).",
@@ -1357,7 +1568,11 @@ interface Pending {
 }
 
 interface Client {
-  call<T>(method: string, args?: unknown[], transfer?: Transferable[]): Promise<T>;
+  call<T>(
+    method: string,
+    args?: unknown[],
+    transfer?: Transferable[],
+  ): Promise<T>;
 }
 
 // Initialization is async and must happen exactly once. Cache the promise so
@@ -1445,7 +1660,9 @@ export async function updateUmbrellaCategory(
   cat: NewUmbrellaCategory,
 ): Promise<UmbrellaCategoryRow> {
   const client = await getClient();
-  return client.call<UmbrellaCategoryRow>("updateUmbrellaCategory", [{ id, ...cat }]);
+  return client.call<UmbrellaCategoryRow>("updateUmbrellaCategory", [
+    { id, ...cat },
+  ]);
 }
 
 /**
@@ -1480,7 +1697,10 @@ export async function listCategories(): Promise<CategoryRow[]> {
 }
 
 /** Rename a category, change its flow, or move it under another umbrella. */
-export async function updateCategory(id: number, cat: NewCategory): Promise<CategoryRow> {
+export async function updateCategory(
+  id: number,
+  cat: NewCategory,
+): Promise<CategoryRow> {
   const client = await getClient();
   return client.call<CategoryRow>("updateCategory", [{ id, ...cat }]);
 }
@@ -1543,6 +1763,22 @@ export async function deleteRule(id: number): Promise<void> {
 export async function runRules(): Promise<number> {
   const client = await getClient();
   return client.call<number>("runRules");
+}
+
+/**
+ * Assign `categoryId` to these transactions and remember each full description
+ * as a substring of that category, so later transactions with the same
+ * description are categorized automatically. Pass `null` to clear the category
+ * without saving a description. Returns the full transaction list.
+ */
+export async function categorizeTransactions(
+  ids: number[],
+  categoryId: number | null,
+): Promise<TransactionRow[]> {
+  const client = await getClient();
+  return client.call<TransactionRow[]>("categorizeTransactions", [
+    { ids, categoryId },
+  ]);
 }
 
 /** Rename an account. Returns the stored name. */
