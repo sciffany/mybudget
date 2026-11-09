@@ -1,6 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import {
+  ACCOUNT_TYPE_LABELS,
+  type AccountRow,
+  type AccountType,
+} from "@/lib/db";
 import type { ParsedStatement } from "@/lib/statements";
 
 /** Convert a formatted amount like "1,234.56" into integer cents. */
@@ -35,6 +40,11 @@ export default function ImportPage() {
   const [fileHash, setFileHash] = useState<string | null>(null);
   const [alreadyImported, setAlreadyImported] = useState(false);
 
+  const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  const [accountId, setAccountId] = useState<number | null>(null);
+  const [newAccountName, setNewAccountName] = useState("");
+  const [creatingAccount, setCreatingAccount] = useState(false);
+
   async function parseFile(next: File) {
     setFile(next);
     setBusy(true);
@@ -42,13 +52,21 @@ export default function ImportPage() {
     setTxnResult(null);
     setFileHash(null);
     setAlreadyImported(false);
+    setAccounts([]);
+    setAccountId(null);
+    setNewAccountName("");
     try {
       const bytes = new Uint8Array(await next.arrayBuffer());
       const hash = await sha256Hex(bytes);
-      const { findImportByFileHash } = await import("@/lib/db");
+      const { findImportByFileHash, listAccounts } = await import("@/lib/db");
       const existing = await findImportByFileHash(hash);
       const { parseStatement } = await import("@/lib/statements");
       const res = await parseStatement(bytes, setStatus);
+      const matching = (await listAccounts())
+        .filter((account) => account.type === res.accountType)
+        .sort((a, b) => a.id - b.id);
+      setAccounts(matching);
+      setAccountId(matching[0]?.id ?? null);
       setFileHash(hash);
       setTxnResult(res);
       if (existing) {
@@ -68,8 +86,42 @@ export default function ImportPage() {
     }
   }
 
+  async function handleCreateAccount() {
+    if (!txnResult) return;
+    const trimmed = newAccountName.trim();
+    if (!trimmed) {
+      setError("Enter a name for the account.");
+      return;
+    }
+    setCreatingAccount(true);
+    setError("");
+    try {
+      const { insertAccount } = await import("@/lib/db");
+      const id = await insertAccount({
+        name: trimmed,
+        type: txnResult.accountType,
+      });
+      const created: AccountRow = {
+        id,
+        name: trimmed,
+        type: txnResult.accountType,
+      };
+      setAccounts((current) =>
+        [...current, created].sort((a, b) => a.id - b.id),
+      );
+      setAccountId(id);
+      setNewAccountName("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreatingAccount(false);
+    }
+  }
+
   async function handleSave() {
-    if (!txnResult || !fileHash || alreadyImported) return;
+    if (!txnResult || !fileHash || alreadyImported || accountId === null) return;
+    const selected = accounts.find((account) => account.id === accountId);
+    if (!selected) return;
     setBusy(true);
     setError("");
     try {
@@ -83,6 +135,7 @@ export default function ImportPage() {
             amount,
             type: t.transactionType,
             description: t.description,
+            accountId: selected.id,
           },
         ];
       });
@@ -95,7 +148,7 @@ export default function ImportPage() {
       });
       setAlreadyImported(true);
       setStatus(
-        `Saved ${transactions.length} transaction(s) to your local database`,
+        `Saved ${transactions.length} transaction(s) to ${selected.name}`,
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -114,7 +167,7 @@ export default function ImportPage() {
           {txnResult ? (
             <button
               onClick={handleSave}
-              disabled={busy || alreadyImported || !fileHash}
+              disabled={busy || alreadyImported || !fileHash || accountId === null}
               className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
             >
               {busy
@@ -147,6 +200,20 @@ export default function ImportPage() {
         {status && (
           <p className="text-sm text-zinc-600 dark:text-zinc-400">{status}</p>
         )}
+        {txnResult && !alreadyImported && (
+          <AccountPicker
+            accountType={txnResult.accountType}
+            accounts={accounts}
+            accountId={accountId}
+            disabled={busy || creatingAccount}
+            newAccountName={newAccountName}
+            creatingAccount={creatingAccount}
+            onAccountId={setAccountId}
+            onNewAccountName={setNewAccountName}
+            onCreate={() => void handleCreateAccount()}
+          />
+        )}
+
         {error && (
           <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
         )}
@@ -200,5 +267,82 @@ export default function ImportPage() {
         </section>
       )}
     </main>
+  );
+}
+
+function AccountPicker({
+  accountType,
+  accounts,
+  accountId,
+  disabled,
+  newAccountName,
+  creatingAccount,
+  onAccountId,
+  onNewAccountName,
+  onCreate,
+}: {
+  accountType: AccountType;
+  accounts: AccountRow[];
+  accountId: number | null;
+  disabled: boolean;
+  newAccountName: string;
+  creatingAccount: boolean;
+  onAccountId: (id: number) => void;
+  onNewAccountName: (name: string) => void;
+  onCreate: () => void;
+}) {
+  const typeLabel = ACCOUNT_TYPE_LABELS[accountType];
+
+  return (
+    <div className="flex flex-col gap-3 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+      <label className="flex max-w-md flex-col gap-1 text-sm">
+        <span className="font-medium text-zinc-700 dark:text-zinc-300">
+          Save to {typeLabel} account
+        </span>
+        <select
+          value={accountId ?? ""}
+          disabled={disabled || accounts.length === 0}
+          onChange={(e) => onAccountId(Number(e.target.value))}
+          className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+        >
+          {accounts.length === 0 ? (
+            <option value="">No {typeLabel} accounts yet</option>
+          ) : (
+            accounts.map((account) => (
+              <option key={account.id} value={account.id}>
+                {account.name}
+              </option>
+            ))
+          )}
+        </select>
+      </label>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onCreate();
+        }}
+        className="flex flex-wrap items-end gap-3"
+      >
+        <label className="flex min-w-48 flex-1 flex-col gap-1 text-sm">
+          <span className="font-medium text-zinc-700 dark:text-zinc-300">
+            Or create a new {typeLabel} account
+          </span>
+          <input
+            value={newAccountName}
+            onChange={(e) => onNewAccountName(e.target.value)}
+            placeholder="Everyday savings"
+            disabled={disabled}
+            className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+          />
+        </label>
+        <button
+          type="submit"
+          disabled={disabled || !newAccountName.trim()}
+          className="rounded-md border border-zinc-300 bg-zinc-50 px-4 py-2 text-sm font-medium hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700"
+        >
+          {creatingAccount ? "Creating..." : "Create account"}
+        </button>
+      </form>
+    </div>
   );
 }

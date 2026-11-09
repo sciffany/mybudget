@@ -66,6 +66,23 @@ export type AccountType =
   | "paylah"
   | "ocbcCredit";
 
+/** Every account type the `accounts.type` check constraint accepts. */
+export const ACCOUNT_TYPES: readonly AccountType[] = [
+  "dbs",
+  "ocbc",
+  "uobCredit",
+  "paylah",
+  "ocbcCredit",
+];
+
+export const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
+  dbs: "DBS",
+  ocbc: "OCBC",
+  uobCredit: "UOB Credit",
+  paylah: "PayLah",
+  ocbcCredit: "OCBC Credit",
+};
+
 export interface CategoryRow {
   id: number;
   name: string;
@@ -386,6 +403,43 @@ const handlers = {
       returnValue: "resultRows",
     });
   },
+  renameAccount(acc) {
+    const name = String(acc.name ?? "").trim();
+    if (!name) throw new Error("Enter a name for the account.");
+    db.exec({
+      sql: "UPDATE accounts SET name = $name WHERE id = $id",
+      bind: { $name: name, $id: acc.id },
+    });
+    const [[changes]] = db.exec({
+      sql: "SELECT changes()",
+      rowMode: "array",
+      returnValue: "resultRows",
+    });
+    if (!changes) throw new Error("Account not found.");
+    return name;
+  },
+  countAccountTransactions(id) {
+    const rows = db.exec({
+      sql: "SELECT COUNT(*) AS n FROM transactions WHERE account_id = $id",
+      bind: { $id: id },
+      rowMode: "object",
+      returnValue: "resultRows",
+    });
+    return rows[0] ? rows[0].n : 0;
+  },
+  deleteAccount(id) {
+    db.exec({
+      sql: "DELETE FROM accounts WHERE id = $id",
+      bind: { $id: id },
+    });
+    const [[changes]] = db.exec({
+      sql: "SELECT changes()",
+      rowMode: "array",
+      returnValue: "resultRows",
+    });
+    if (!changes) throw new Error("Account not found.");
+    return null;
+  },
   findImportByFileHash(fileHash) {
     const rows = db.exec({
       sql: \`SELECT id, filename, file_hash, page_count, account_type, created_at
@@ -658,6 +712,27 @@ export async function insertAccount(acc: NewAccount): Promise<number> {
 export async function listAccounts(): Promise<AccountRow[]> {
   const client = await getClient();
   return client.call<AccountRow[]>("listAccounts");
+}
+
+/** Rename an account. Returns the stored name. */
+export async function renameAccount(id: number, name: string): Promise<string> {
+  const client = await getClient();
+  return client.call<string>("renameAccount", [{ id, name }]);
+}
+
+/** How many transactions are linked to this account. */
+export async function countAccountTransactions(id: number): Promise<number> {
+  const client = await getClient();
+  return client.call<number>("countAccountTransactions", [id]);
+}
+
+/**
+ * Delete an account. Linked transactions stay; their `account_id` is cleared
+ * by the foreign key (`ON DELETE SET NULL`).
+ */
+export async function deleteAccount(id: number): Promise<void> {
+  const client = await getClient();
+  await client.call<null>("deleteAccount", [id]);
 }
 
 /**
