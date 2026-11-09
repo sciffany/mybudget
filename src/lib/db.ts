@@ -106,6 +106,13 @@ const PRESET_RULES: readonly {
     substrings: ["Funds Transfer TOP-UP TO PAYLAH!"],
   },
   {
+    key: "transfer",
+    umbrella: "Transfer",
+    category: "Transfer",
+    type: "credit",
+    substrings: ["TOP UP WALLET FROM MY ACCOUNT REF NO"],
+  },
+  {
     key: "transportation",
     umbrella: "Daily Expenses",
     category: "Transportation",

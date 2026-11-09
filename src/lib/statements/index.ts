@@ -5,10 +5,12 @@
 
 import type { AccountType } from "@/lib/db";
 import { dbsParser } from "@/lib/statements/dbs";
+import { ocbcParser } from "@/lib/statements/ocbc";
+import { paylahParser } from "@/lib/statements/paylah";
 import { extractPdfPages } from "@/lib/statements/pdf";
 import type { ParsedStatement, StatementParser } from "@/lib/statements/types";
 
-const parsers: StatementParser[] = [dbsParser];
+const parsers: StatementParser[] = [paylahParser, ocbcParser, dbsParser];
 
 export async function parseStatement(
   bytes: Uint8Array,
