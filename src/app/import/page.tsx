@@ -1,8 +1,28 @@
 "use client";
 
-import { useEffect, useState, type ChangeEvent } from "react";
-import type { ParseResult } from "@/lib/pdfjs-dbs";
-import type { DocumentRow } from "@/lib/db";
+import { useState } from "react";
+import type { ParsedStatement } from "@/lib/statements";
+
+/** Convert a formatted amount like "1,234.56" into integer cents. */
+function toCents(amount: string): number | null {
+  const n = Number(amount.replace(/,/g, ""));
+  if (!Number.isFinite(n)) return null;
+  return Math.round(Math.abs(n) * 100);
+}
+
+/** Convert a DBS date "DD/MM/YYYY" into an ISO "YYYY-MM-DD" date. */
+function toIsoDate(date: string): string {
+  const [dd, mm, yyyy] = date.split("/");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/** SHA-256 hex of the PDF bytes. This is the import's duplicate key. */
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes.slice());
+  return Array.from(new Uint8Array(digest), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
+}
 
 export default function ImportPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -11,36 +31,34 @@ export default function ImportPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>("");
 
-  const [txnResult, setTxnResult] = useState<ParseResult | null>(null);
-  const [documents, setDocuments] = useState<DocumentRow[]>([]);
+  const [txnResult, setTxnResult] = useState<ParsedStatement | null>(null);
+  const [fileHash, setFileHash] = useState<string | null>(null);
+  const [alreadyImported, setAlreadyImported] = useState(false);
 
-  // Load the saved document list on mount (browser only).
-  useEffect(() => {
-    void refreshDocuments();
-  }, []);
-
-  async function refreshDocuments() {
-    try {
-      const { listDocuments } = await import("@/lib/db");
-      setDocuments(await listDocuments());
-    } catch (e) {
-      // Non-fatal: the DB may not be initialized yet.
-      console.error(e);
-    }
-  }
-
-  async function handleParseTransactions() {
-    if (!file) return;
+  async function parseFile(next: File) {
+    setFile(next);
     setBusy(true);
     setError("");
     setTxnResult(null);
+    setFileHash(null);
+    setAlreadyImported(false);
     try {
-      const { parseDbsStatement } = await import("@/lib/pdfjs-dbs");
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const res = await parseDbsStatement(bytes, setStatus);
+      const bytes = new Uint8Array(await next.arrayBuffer());
+      const hash = await sha256Hex(bytes);
+      const { findImportByFileHash } = await import("@/lib/db");
+      const existing = await findImportByFileHash(hash);
+      const { parseStatement } = await import("@/lib/statements");
+      const res = await parseStatement(bytes, setStatus);
+      setFileHash(hash);
       setTxnResult(res);
+      if (existing) {
+        setAlreadyImported(true);
+        setError(
+          `This PDF was already imported (${existing.filename}, ${existing.created_at}).`,
+        );
+      }
       setStatus(
-        `Parsed ${res.transactions.length} transaction(s) across ${res.pageCount} page(s)`,
+        `Parsed ${res.transactions.length} ${res.accountType} transaction(s) across ${res.pageCount} page(s)`,
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -51,77 +69,36 @@ export default function ImportPage() {
   }
 
   async function handleSave() {
-    if (!file || !txnResult) return;
+    if (!txnResult || !fileHash || alreadyImported) return;
     setBusy(true);
     setError("");
     try {
-      const { insertDocument } = await import("@/lib/db");
-      // Serialize the parsed transactions into a tab-separated text blob so the
-      // document store keeps a readable record of what was extracted.
-      const text = txnResult.transactions
-        .map((t) =>
-          [
-            t.date,
-            t.account ?? "",
-            t.description,
-            t.withdrawal,
-            t.deposit,
-            t.balance,
-          ].join("\t"),
-        )
-        .join("\n");
-      await insertDocument({
-        filename: file.name,
-        pageCount: txnResult.pageCount,
-        text,
+      const { saveImport } = await import("@/lib/db");
+      const transactions = txnResult.transactions.flatMap((t) => {
+        const amount = toCents(t.amount);
+        if (amount === null) return []; // skip rows without a parseable amount
+        return [
+          {
+            date: toIsoDate(t.date),
+            amount,
+            type: t.transactionType,
+            description: t.description,
+          },
+        ];
       });
-      await refreshDocuments();
-      setStatus(`Saved "${file.name}" to your local database`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleDownloadBackup() {
-    setBusy(true);
-    setError("");
-    try {
-      const { exportDatabase } = await import("@/lib/db");
-      const bytes = await exportDatabase();
-      // Copy into a fresh ArrayBuffer so the Blob gets a clean slice.
-      const buf = bytes.slice().buffer;
-      const url = URL.createObjectURL(
-        new Blob([buf], { type: "application/x-sqlite3" }),
+      await saveImport({
+        filename: file?.name ?? "statement.pdf",
+        fileHash,
+        pageCount: txnResult.pageCount,
+        accountType: txnResult.accountType,
+        transactions,
+      });
+      setAlreadyImported(true);
+      setStatus(
+        `Saved ${transactions.length} transaction(s) to your local database`,
       );
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "budget.sqlite";
-      a.click();
-      URL.revokeObjectURL(url);
-      setStatus("Backup downloaded as budget.sqlite");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleRestoreBackup(e: ChangeEvent<HTMLInputElement>) {
-    const backup = e.target.files?.[0];
-    e.target.value = ""; // allow re-selecting the same file later
-    if (!backup) return;
-    setBusy(true);
-    setError("");
-    try {
-      const { importDatabase } = await import("@/lib/db");
-      const bytes = new Uint8Array(await backup.arrayBuffer());
-      await importDatabase(bytes);
-      await refreshDocuments();
-      setStatus(`Restored database from "${backup.name}"`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -129,44 +106,42 @@ export default function ImportPage() {
 
   return (
     <main className="mx-auto flex max-w-6xl flex-col gap-8 px-6 py-12">
-      {/* Step 1: choose a PDF */}
       <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
-          1. Choose a PDF
+          Import
         </h2>
         <div className="flex flex-wrap items-center gap-3">
-          <label className="inline-flex cursor-pointer items-center rounded-md border border-zinc-300 bg-zinc-50 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700">
-            Choose file
-            <input
-              type="file"
-              accept="application/pdf"
-              onChange={(e) => {
-                setFile(e.target.files?.[0] ?? null);
-                setTxnResult(null);
-              }}
-              className="hidden"
-            />
-          </label>
+          {txnResult ? (
+            <button
+              onClick={handleSave}
+              disabled={busy || alreadyImported || !fileHash}
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+            >
+              {busy
+                ? "Working..."
+                : alreadyImported
+                  ? "Already imported"
+                  : "Save to transactions"}
+            </button>
+          ) : (
+            <label className="inline-flex cursor-pointer items-center rounded-md border border-zinc-300 bg-zinc-50 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700">
+              {busy ? "Working..." : "Choose file"}
+              <input
+                type="file"
+                accept="application/pdf"
+                disabled={busy}
+                onChange={(e) => {
+                  const next = e.target.files?.[0];
+                  e.target.value = "";
+                  if (next) void parseFile(next);
+                }}
+                className="hidden"
+              />
+            </label>
+          )}
           <span className="text-sm text-zinc-600 dark:text-zinc-400">
             {file ? file.name : "No file chosen"}
           </span>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            onClick={handleParseTransactions}
-            disabled={!file || busy}
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
-          >
-            {busy ? "Working..." : "Parse transactions"}
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={!txnResult || busy}
-            className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium disabled:opacity-40 dark:border-zinc-700"
-          >
-            Save to local database
-          </button>
         </div>
 
         {status && (
@@ -177,17 +152,14 @@ export default function ImportPage() {
         )}
       </section>
 
-      {/* Transactions parsed with pure frontend JS (pdf.js) */}
       {txnResult && (
         <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
-            Transactions ({txnResult.transactions.length}) · parsed in-browser
-            with pdf.js
+            Transactions ({txnResult.transactions.length})
           </h2>
           {txnResult.transactions.length === 0 ? (
             <p className="text-sm text-zinc-600 dark:text-zinc-400">
-              No transactions found. This parser expects a DBS/POSB consolidated
-              statement.
+              No transactions found in this {txnResult.accountType} statement.
             </p>
           ) : (
             <div className="overflow-x-auto rounded-md border border-zinc-200 dark:border-zinc-800">
@@ -195,11 +167,9 @@ export default function ImportPage() {
                 <thead>
                   <tr className="bg-zinc-100 text-left font-medium dark:bg-zinc-800">
                     <th className="px-2 py-1">Date</th>
-                    <th className="px-2 py-1">Account</th>
                     <th className="px-2 py-1">Description</th>
-                    <th className="px-2 py-1 text-right">Withdrawal</th>
-                    <th className="px-2 py-1 text-right">Deposit</th>
-                    <th className="px-2 py-1 text-right">Balance</th>
+                    <th className="px-2 py-1 text-right">Amount</th>
+                    <th className="px-2 py-1">Type</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -208,18 +178,18 @@ export default function ImportPage() {
                       <td className="whitespace-nowrap px-2 py-1 align-top">
                         {t.date}
                       </td>
-                      <td className="whitespace-nowrap px-2 py-1 align-top text-xs text-zinc-500">
-                        {t.account}
-                      </td>
                       <td className="px-2 py-1 align-top">{t.description}</td>
-                      <td className="whitespace-nowrap px-2 py-1 text-right align-top text-red-600 dark:text-red-400">
-                        {t.withdrawal}
+                      <td
+                        className={`whitespace-nowrap px-2 py-1 text-right align-top ${
+                          t.transactionType === "debit"
+                            ? "text-red-600 dark:text-red-400"
+                            : "text-green-600 dark:text-green-400"
+                        }`}
+                      >
+                        {t.amount}
                       </td>
-                      <td className="whitespace-nowrap px-2 py-1 text-right align-top text-green-600 dark:text-green-400">
-                        {t.deposit}
-                      </td>
-                      <td className="whitespace-nowrap px-2 py-1 text-right align-top">
-                        {t.balance}
+                      <td className="whitespace-nowrap px-2 py-1 align-top capitalize">
+                        {t.transactionType}
                       </td>
                     </tr>
                   ))}
@@ -229,57 +199,6 @@ export default function ImportPage() {
           )}
         </section>
       )}
-
-      {/* Step 3: saved documents + backup */}
-      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
-            2. Saved documents ({documents.length})
-          </h2>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={handleDownloadBackup}
-              disabled={busy}
-              className="rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-medium disabled:opacity-40 dark:border-zinc-700"
-            >
-              Download backup
-            </button>
-            <label className="cursor-pointer rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-medium dark:border-zinc-700">
-              Restore backup
-              <input
-                type="file"
-                accept=".sqlite,application/x-sqlite3,application/octet-stream"
-                onChange={handleRestoreBackup}
-                className="hidden"
-              />
-            </label>
-          </div>
-        </div>
-
-        {documents.length === 0 ? (
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            Nothing saved yet. Parse a PDF and click &quot;Save&quot;.
-          </p>
-        ) : (
-          <ul className="flex flex-col divide-y divide-zinc-100 dark:divide-zinc-800">
-            {documents.map((doc) => (
-              <li
-                key={doc.id}
-                className="flex items-center justify-between py-2 text-sm"
-              >
-                <span className="truncate font-medium">{doc.filename}</span>
-                <span className="shrink-0 pl-4 text-xs text-zinc-500">
-                  {doc.page_count} pages · {doc.created_at}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-        <p className="text-xs text-zinc-500">
-          Data lives only in this browser. Download a backup to keep it safe
-          from clearing your browser or to move it to another device.
-        </p>
-      </section>
     </main>
   );
 }

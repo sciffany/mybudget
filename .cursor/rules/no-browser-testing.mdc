@@ -1,0 +1,10 @@
+---
+description: Skip browser testing unless the user explicitly asks for it
+alwaysApply: true
+---
+
+# Browser testing
+
+Do not open the browser, drive the app, or verify UI in a browser unless the user explicitly asks you to.
+
+When a change would normally be checked in the browser, finish the code change and say what was not verified in the browser. Use tests or other non-browser checks only when they already fit the task.
