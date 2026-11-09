@@ -67,6 +67,8 @@ export default function RulesPage() {
   const [listError, setListError] = useState("");
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [running, setRunning] = useState(false);
+  const [runMessage, setRunMessage] = useState("");
 
   const categoryGroups = useMemo(() => {
     const byUmbrella = new Map<number, CategoryRow[]>();
@@ -204,7 +206,26 @@ export default function RulesPage() {
     }
   }
 
-  const busy = saving || busyId !== null;
+  async function handleRunRules() {
+    setRunning(true);
+    setListError("");
+    setRunMessage("");
+    try {
+      const { runRules } = await import("@/lib/db");
+      const updated = await runRules();
+      setRunMessage(
+        updated === 1
+          ? "Categorized 1 transaction."
+          : `Categorized ${updated} transactions.`,
+      );
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const busy = saving || busyId !== null || running;
 
   return (
     <main className="mx-auto flex max-w-6xl flex-col gap-8 px-6 py-12">
@@ -323,9 +344,22 @@ export default function RulesPage() {
       </section>
 
       <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
-          Rules{rows ? ` (${rows.length})` : ""}
-        </h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
+            Rules{rows ? ` (${rows.length})` : ""}
+          </h2>
+          <button
+            type="button"
+            onClick={handleRunRules}
+            disabled={busy || rows === null}
+            className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+          >
+            {running ? "Running..." : "Run Rules"}
+          </button>
+        </div>
+        {runMessage && (
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">{runMessage}</p>
+        )}
 
         {listError && (
           <p className="text-sm text-red-600 dark:text-red-400">{listError}</p>

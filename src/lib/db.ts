@@ -206,6 +206,17 @@ export const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
   ocbcCredit: "OCBC Credit",
 };
 
+/**
+ * Accounts created on every startup when that name is missing. Existing rows
+ * with the same name are left alone. A renamed or deleted preset is created
+ * again under its original name.
+ */
+const PRESET_ACCOUNTS: readonly { name: string; type: AccountType }[] =
+  ACCOUNT_TYPES.map((type) => ({
+    name: ACCOUNT_TYPE_LABELS[type],
+    type,
+  }));
+
 /** A grouping that categories belong to. Transactions are not assigned here directly. */
 export interface UmbrellaCategoryRow {
   id: number;
@@ -358,6 +369,7 @@ import sqlite3InitModule from ${JSON.stringify(SQLITE_WASM_URL)};
 const DB_PATH = ${JSON.stringify(DB_PATH)};
 const VFS_DIR = ${JSON.stringify(VFS_DIR)};
 const PRESET_CATEGORY_GROUPS = ${JSON.stringify(PRESET_CATEGORY_GROUPS)};
+const PRESET_ACCOUNTS = ${JSON.stringify(PRESET_ACCOUNTS)};
 const PRESET_RULES = ${JSON.stringify(PRESET_RULES)};
 const PRESET_RULE_MIN_CENTS = ${PRESET_RULE_MIN_CENTS};
 const PRESET_RULE_MAX_CENTS = ${PRESET_RULE_MAX_CENTS};
@@ -413,6 +425,22 @@ function seedPresetCategories(database) {
         bind: { $name: name, $flow: group.flow, $umbrellaId: umbrellaId },
       });
     }
+  }
+}
+
+function seedPresetAccounts(database) {
+  for (const preset of PRESET_ACCOUNTS) {
+    const existing = database.exec({
+      sql: "SELECT 1 FROM accounts WHERE name = $name LIMIT 1",
+      bind: { $name: preset.name },
+      rowMode: "array",
+      returnValue: "resultRows",
+    });
+    if (existing.length > 0) continue;
+    database.exec({
+      sql: "INSERT INTO accounts (name, type) VALUES ($name, $type)",
+      bind: { $name: preset.name, $type: preset.type },
+    });
   }
 }
 
@@ -476,6 +504,7 @@ function categoryIdForTransaction(database, description, amount, type) {
   return best ? best.categoryId : null;
 }
 
+/** Assign a category to every uncategorized transaction a rule matches. Returns how many were updated. */
 function classifyUncategorized(database) {
   const rows = database.exec({
     sql: \`SELECT id, description, amount, type
@@ -484,6 +513,7 @@ function classifyUncategorized(database) {
     rowMode: "object",
     returnValue: "resultRows",
   });
+  let updated = 0;
   for (const row of rows) {
     const categoryId = categoryIdForTransaction(
       database,
@@ -496,7 +526,9 @@ function classifyUncategorized(database) {
       sql: "UPDATE transactions SET category_id = $categoryId WHERE id = $id",
       bind: { $categoryId: categoryId, $id: row.id },
     });
+    updated += 1;
   }
+  return updated;
 }
 
 function migrate(database) {
@@ -692,6 +724,7 @@ function migrate(database) {
   \`);
 
   seedPresetCategories(database);
+  seedPresetAccounts(database);
   seedPresetRules(database);
   classifyUncategorized(database);
 }
@@ -1021,6 +1054,10 @@ const handlers = {
     });
     if (!changes) throw new Error("Rule not found.");
     return storedRule(rule.id, bound);
+  },
+  /** Apply every rule to transactions that still have no category. */
+  runRules() {
+    return classifyUncategorized(db);
   },
   deleteRule(id) {
     db.exec({
@@ -1440,6 +1477,15 @@ export async function updateRule(id: number, rule: NewRule): Promise<RuleRow> {
 export async function deleteRule(id: number): Promise<void> {
   const client = await getClient();
   await client.call<null>("deleteRule", [id]);
+}
+
+/**
+ * Apply every rule to transactions that still have no category.
+ * Returns how many transactions received a category.
+ */
+export async function runRules(): Promise<number> {
+  const client = await getClient();
+  return client.call<number>("runRules");
 }
 
 /** Rename an account. Returns the stored name. */

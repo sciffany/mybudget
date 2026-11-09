@@ -4,11 +4,42 @@ import { useEffect, useMemo, useState } from "react";
 import type { TransactionRow } from "@/lib/db";
 
 const PAGE_SIZE = 200;
+const NONE = "none";
 
 const money = new Intl.NumberFormat("en-SG", {
   style: "currency",
   currency: "SGD",
 });
+
+const fieldClass =
+  "rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950";
+
+function formatMonth(yearMonth: string): string {
+  const [year, month] = yearMonth.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-SG", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+function uniqueOptions(
+  rows: TransactionRow[],
+  idOf: (row: TransactionRow) => number | null,
+  nameOf: (row: TransactionRow) => string | null,
+  emptyLabel: string,
+): [string, string][] {
+  const named = new Map<string, string>();
+  let hasEmpty = false;
+  for (const row of rows) {
+    const id = idOf(row);
+    if (id == null) hasEmpty = true;
+    else named.set(String(id), nameOf(row) ?? "Untitled");
+  }
+  const options = [...named.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  if (hasEmpty) options.unshift([NONE, emptyLabel]);
+  return options;
+}
 
 function formatAmount(cents: number, type: TransactionRow["type"]): string {
   const value = cents / 100;
@@ -22,6 +53,9 @@ export default function TransactionsPage() {
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [deleting, setDeleting] = useState(false);
+  const [month, setMonth] = useState("");
+  const [category, setCategory] = useState("");
+  const [account, setAccount] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -39,13 +73,46 @@ export default function TransactionsPage() {
     };
   }, []);
 
-  const pageCount = rows ? Math.max(1, Math.ceil(rows.length / PAGE_SIZE)) : 1;
+  const months = useMemo(() => {
+    if (!rows) return [];
+    return [...new Set(rows.map((t) => t.date.slice(0, 7)))].sort().reverse();
+  }, [rows]);
+
+  const categories = useMemo(
+    () =>
+      rows
+        ? uniqueOptions(rows, (t) => t.category_id, (t) => t.category_name, "Uncategorized")
+        : [],
+    [rows],
+  );
+
+  const accounts = useMemo(
+    () =>
+      rows
+        ? uniqueOptions(rows, (t) => t.account_id, (t) => t.account_name, "No account")
+        : [],
+    [rows],
+  );
+
+  const filtered = useMemo(() => {
+    if (!rows) return [];
+    return rows.filter((t) => {
+      if (month && t.date.slice(0, 7) !== month) return false;
+      if (category === NONE && t.category_id != null) return false;
+      if (category && category !== NONE && String(t.category_id) !== category) return false;
+      if (account === NONE && t.account_id != null) return false;
+      if (account && account !== NONE && String(t.account_id) !== account) return false;
+      return true;
+    });
+  }, [rows, month, category, account]);
+
+  const filtersActive = month !== "" || category !== "" || account !== "";
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
   const pageRows = useMemo(() => {
-    if (!rows) return [];
     const start = safePage * PAGE_SIZE;
-    return rows.slice(start, start + PAGE_SIZE);
-  }, [rows, safePage]);
+    return filtered.slice(start, start + PAGE_SIZE);
+  }, [filtered, safePage]);
 
   useEffect(() => {
     if (page !== safePage) setPage(safePage);
@@ -54,8 +121,22 @@ export default function TransactionsPage() {
   const allOnPageSelected =
     pageRows.length > 0 && pageRows.every((t) => selected.has(t.id));
   const someOnPageSelected = pageRows.some((t) => selected.has(t.id));
-  const rangeStart = rows && rows.length > 0 ? safePage * PAGE_SIZE + 1 : 0;
-  const rangeEnd = rows ? Math.min(rows.length, (safePage + 1) * PAGE_SIZE) : 0;
+  const rangeStart = filtered.length > 0 ? safePage * PAGE_SIZE + 1 : 0;
+  const rangeEnd = Math.min(filtered.length, (safePage + 1) * PAGE_SIZE);
+
+  function applyFilter(setter: (value: string) => void, value: string) {
+    setter(value);
+    setPage(0);
+    setSelected(new Set());
+  }
+
+  function clearFilters() {
+    setMonth("");
+    setCategory("");
+    setAccount("");
+    setPage(0);
+    setSelected(new Set());
+  }
 
   function toggleOne(id: number) {
     setSelected((prev) => {
@@ -104,7 +185,12 @@ export default function TransactionsPage() {
     <main className="mx-auto flex max-w-6xl flex-col gap-8 px-6 py-12">
       <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
-          Transactions{rows ? ` (${rows.length})` : ""}
+          Transactions
+          {rows
+            ? filtersActive
+              ? ` (${filtered.length} of ${rows.length})`
+              : ` (${rows.length})`
+            : ""}
         </h2>
 
         {error && (
@@ -123,9 +209,74 @@ export default function TransactionsPage() {
 
         {rows && rows.length > 0 && (
           <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="flex min-w-40 flex-col gap-1 text-sm">
+                <span className="font-medium text-zinc-700 dark:text-zinc-300">Month</span>
+                <select
+                  value={month}
+                  onChange={(e) => applyFilter(setMonth, e.target.value)}
+                  className={fieldClass}
+                >
+                  <option value="">All months</option>
+                  {months.map((value) => (
+                    <option key={value} value={value}>
+                      {formatMonth(value)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex min-w-40 flex-col gap-1 text-sm">
+                <span className="font-medium text-zinc-700 dark:text-zinc-300">Category</span>
+                <select
+                  value={category}
+                  onChange={(e) => applyFilter(setCategory, e.target.value)}
+                  className={fieldClass}
+                >
+                  <option value="">All categories</option>
+                  {categories.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex min-w-40 flex-col gap-1 text-sm">
+                <span className="font-medium text-zinc-700 dark:text-zinc-300">Account</span>
+                <select
+                  value={account}
+                  onChange={(e) => applyFilter(setAccount, e.target.value)}
+                  className={fieldClass}
+                >
+                  <option value="">All accounts</option>
+                  {accounts.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {filtersActive && (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="rounded-md border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700"
+                >
+                  Clear filters
+                </button>
+              )}
+            </div>
+
+            {filtered.length === 0 && (
+              <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                No transactions match these filters.
+              </p>
+            )}
+
+            {filtered.length > 0 && (
+            <>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                Showing {rangeStart}–{rangeEnd} of {rows.length}
+                Showing {rangeStart}–{rangeEnd} of {filtered.length}
               </p>
               <button
                 type="button"
@@ -221,6 +372,8 @@ export default function TransactionsPage() {
                   Next
                 </button>
               </div>
+            )}
+            </>
             )}
           </div>
         )}
