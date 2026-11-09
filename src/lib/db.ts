@@ -59,6 +59,7 @@ const PRESET_CATEGORY_GROUPS: readonly {
       "Software Service",
       "Shopping",
       "Travel",
+      "Enrichment",
     ],
   },
   {
@@ -82,8 +83,9 @@ const PRESET_CATEGORY_GROUPS: readonly {
  * Rules created on startup when that preset is missing. A transaction matches
  * when its description contains any substring (ignoring letter case), the
  * amount falls in the range, and the direction matches. Income categories are
- * credits; the rest are debits. The range covers any amount. An edited preset
- * is left alone; a deleted one is created again.
+ * credits; the rest are debits. The range covers any amount. Substrings from
+ * this list that are missing on an existing preset rule are appended. Other
+ * edits stay in place. A deleted preset is created again.
  */
 const PRESET_RULE_MIN_CENTS = 0;
 const PRESET_RULE_MAX_CENTS = 99_999_999_99;
@@ -106,7 +108,7 @@ const PRESET_RULES: readonly {
     umbrella: "Daily Expenses",
     category: "Transportation",
     type: "debit",
-    substrings: ["BUS/MRT"],
+    substrings: ["BUS/MRT", "Grab"],
   },
   {
     key: "insurance",
@@ -153,7 +155,30 @@ const PRESET_RULES: readonly {
       "Shun Feng",
       "Tau Foo",
       "Chendol",
+      "Bread",
+      "Pasta",
     ],
+  },
+  {
+    key: "software-service",
+    umbrella: "Special Expenses",
+    category: "Software Service",
+    type: "debit",
+    substrings: ["Google", "Vercel"],
+  },
+  {
+    key: "housing",
+    umbrella: "Daily Expenses",
+    category: "Housing",
+    type: "debit",
+    substrings: ["Rent", "Mortgage"],
+  },
+  {
+    key: "enrichment",
+    umbrella: "Special Expenses",
+    category: "Enrichment",
+    type: "debit",
+    substrings: ["Italki", "Duolingo"],
   },
 ];
 
@@ -456,17 +481,49 @@ function seedPresetRules(database) {
       returnValue: "resultRows",
     });
     if (rows.length === 0) continue;
+    const existing = database.exec({
+      sql: "SELECT id, substrings FROM rules WHERE preset_key = $presetKey",
+      bind: { $presetKey: preset.key },
+      rowMode: "object",
+      returnValue: "resultRows",
+    });
+    if (existing.length === 0) {
+      database.exec({
+        sql: \`INSERT INTO rules
+                (substrings, min_amount, max_amount, type, category_id, preset_key)
+              VALUES ($substrings, $minAmount, $maxAmount, $type, $categoryId, $presetKey)\`,
+        bind: {
+          $substrings: preset.substrings.join("\\n"),
+          $minAmount: PRESET_RULE_MIN_CENTS,
+          $maxAmount: PRESET_RULE_MAX_CENTS,
+          $type: preset.type,
+          $categoryId: rows[0][0],
+          $presetKey: preset.key,
+        },
+      });
+      continue;
+    }
+    const current = String(existing[0].substrings);
+    const seen = new Set(
+      current
+        .split(/\\r?\\n/)
+        .map((line) => line.trim().toLowerCase())
+        .filter(Boolean),
+    );
+    const added = [];
+    for (const needle of preset.substrings) {
+      const key = String(needle).trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      added.push(String(needle).trim());
+    }
+    if (added.length === 0) continue;
+    const base = current.replace(/\\s+$/, "");
     database.exec({
-      sql: \`INSERT OR IGNORE INTO rules
-              (substrings, min_amount, max_amount, type, category_id, preset_key)
-            VALUES ($substrings, $minAmount, $maxAmount, $type, $categoryId, $presetKey)\`,
+      sql: "UPDATE rules SET substrings = $substrings WHERE id = $id",
       bind: {
-        $substrings: preset.substrings.join("\\n"),
-        $minAmount: PRESET_RULE_MIN_CENTS,
-        $maxAmount: PRESET_RULE_MAX_CENTS,
-        $type: preset.type,
-        $categoryId: rows[0][0],
-        $presetKey: preset.key,
+        $substrings: base ? base + "\\n" + added.join("\\n") : added.join("\\n"),
+        $id: existing[0].id,
       },
     });
   }

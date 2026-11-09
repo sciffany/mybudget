@@ -241,7 +241,7 @@ export default function RulesPage() {
             <textarea
               value={substrings}
               onChange={(e) => setSubstrings(e.target.value)}
-              placeholder={"FAIRPRICE\nNTUC"}
+              placeholder={"Fairprice\nNtuc"}
               rows={4}
               disabled={saving}
               className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
