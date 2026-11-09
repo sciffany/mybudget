@@ -78,6 +78,85 @@ const PRESET_CATEGORY_GROUPS: readonly {
   },
 ];
 
+/**
+ * Rules created on startup when that preset is missing. A transaction matches
+ * when its description contains any substring (ignoring letter case), the
+ * amount falls in the range, and the direction matches. Income categories are
+ * credits; the rest are debits. The range covers any amount. An edited preset
+ * is left alone; a deleted one is created again.
+ */
+const PRESET_RULE_MIN_CENTS = 0;
+const PRESET_RULE_MAX_CENTS = 99_999_999_99;
+const PRESET_RULES: readonly {
+  key: string;
+  umbrella: string;
+  category: string;
+  type: TransactionType;
+  substrings: readonly string[];
+}[] = [
+  {
+    key: "transfer",
+    umbrella: "Transfer",
+    category: "Transfer",
+    type: "debit",
+    substrings: ["Funds Transfer TOP-UP TO PAYLAH!"],
+  },
+  {
+    key: "transportation",
+    umbrella: "Daily Expenses",
+    category: "Transportation",
+    type: "debit",
+    substrings: ["BUS/MRT"],
+  },
+  {
+    key: "insurance",
+    umbrella: "Planning",
+    category: "Insurance",
+    type: "debit",
+    substrings: ["Insurance"],
+  },
+  {
+    key: "interest",
+    umbrella: "Income",
+    category: "Interest",
+    type: "credit",
+    substrings: ["Interest"],
+  },
+  {
+    key: "salary",
+    umbrella: "Income",
+    category: "Salary",
+    type: "credit",
+    substrings: ["Sala"],
+  },
+  {
+    key: "shopping",
+    umbrella: "Special Expenses",
+    category: "Shopping",
+    type: "debit",
+    substrings: ["Shopee"],
+  },
+  {
+    key: "food",
+    umbrella: "Daily Expenses",
+    category: "Food",
+    type: "debit",
+    substrings: [
+      "Mala",
+      "Ding Ji",
+      "Shun Heng",
+      "Subway",
+      "Mcdonald's",
+      "Eleven",
+      "Roti",
+      "Food",
+      "Shun Feng",
+      "Tau Foo",
+      "Chendol",
+    ],
+  },
+];
+
 /** A saved statement/document as stored in the `documents` table. */
 export interface DocumentRow {
   id: number;
@@ -233,13 +312,14 @@ export interface NewImport {
 }
 
 /**
- * A rule assigns one category to transactions that match it: every substring
+ * A rule assigns one category to transactions that match it: any substring
  * must appear in the description, the amount must fall in the inclusive range,
- * and the direction must match.
+ * and the direction must match. When several rules match, the longest
+ * substring wins.
  */
 export interface RuleRow {
   id: number;
-  /** Newline-separated substrings. Each one must appear in the description. */
+  /** Newline-separated substrings. Any one may appear in the description. */
   substrings: string;
   /** Inclusive lower bound, in cents. */
   min_amount: number;
@@ -278,6 +358,9 @@ import sqlite3InitModule from ${JSON.stringify(SQLITE_WASM_URL)};
 const DB_PATH = ${JSON.stringify(DB_PATH)};
 const VFS_DIR = ${JSON.stringify(VFS_DIR)};
 const PRESET_CATEGORY_GROUPS = ${JSON.stringify(PRESET_CATEGORY_GROUPS)};
+const PRESET_RULES = ${JSON.stringify(PRESET_RULES)};
+const PRESET_RULE_MIN_CENTS = ${PRESET_RULE_MIN_CENTS};
+const PRESET_RULE_MAX_CENTS = ${PRESET_RULE_MAX_CENTS};
 
 let sqlite3, pool, db;
 
@@ -330,6 +413,89 @@ function seedPresetCategories(database) {
         bind: { $name: name, $flow: group.flow, $umbrellaId: umbrellaId },
       });
     }
+  }
+}
+
+function seedPresetRules(database) {
+  for (const preset of PRESET_RULES) {
+    const rows = database.exec({
+      sql: \`SELECT c.id
+            FROM categories c
+            JOIN umbrella_categories u ON u.id = c.umbrella_id
+            WHERE c.name = $category AND u.name = $umbrella\`,
+      bind: { $category: preset.category, $umbrella: preset.umbrella },
+      rowMode: "array",
+      returnValue: "resultRows",
+    });
+    if (rows.length === 0) continue;
+    database.exec({
+      sql: \`INSERT OR IGNORE INTO rules
+              (substrings, min_amount, max_amount, type, category_id, preset_key)
+            VALUES ($substrings, $minAmount, $maxAmount, $type, $categoryId, $presetKey)\`,
+      bind: {
+        $substrings: preset.substrings.join("\\n"),
+        $minAmount: PRESET_RULE_MIN_CENTS,
+        $maxAmount: PRESET_RULE_MAX_CENTS,
+        $type: preset.type,
+        $categoryId: rows[0][0],
+        $presetKey: preset.key,
+      },
+    });
+  }
+}
+
+/** Category assigned by the most specific matching rule, or null. */
+function categoryIdForTransaction(database, description, amount, type) {
+  const rules = database.exec({
+    sql: \`SELECT id, substrings, min_amount, max_amount, type, category_id
+          FROM rules
+          ORDER BY id\`,
+    rowMode: "object",
+    returnValue: "resultRows",
+  });
+  const haystack = String(description ?? "").toLowerCase();
+  let best = null;
+  for (const rule of rules) {
+    if (rule.type !== type) continue;
+    if (amount < rule.min_amount || amount > rule.max_amount) continue;
+    let longest = 0;
+    for (const line of String(rule.substrings).split(/\\r?\\n/)) {
+      const needle = line.trim().toLowerCase();
+      if (!needle || !haystack.includes(needle)) continue;
+      if (needle.length > longest) longest = needle.length;
+    }
+    if (longest === 0) continue;
+    if (
+      !best ||
+      longest > best.longest ||
+      (longest === best.longest && rule.id < best.id)
+    ) {
+      best = { categoryId: rule.category_id, longest };
+    }
+  }
+  return best ? best.categoryId : null;
+}
+
+function classifyUncategorized(database) {
+  const rows = database.exec({
+    sql: \`SELECT id, description, amount, type
+          FROM transactions
+          WHERE category_id IS NULL\`,
+    rowMode: "object",
+    returnValue: "resultRows",
+  });
+  for (const row of rows) {
+    const categoryId = categoryIdForTransaction(
+      database,
+      row.description,
+      row.amount,
+      row.type,
+    );
+    if (categoryId == null) continue;
+    database.exec({
+      sql: "UPDATE transactions SET category_id = $categoryId WHERE id = $id",
+      bind: { $categoryId: categoryId, $id: row.id },
+    });
   }
 }
 
@@ -504,21 +670,33 @@ function migrate(database) {
   database.exec(\`
     CREATE TABLE IF NOT EXISTS rules (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      substrings  TEXT    NOT NULL,                         -- newline-separated; each must be present
+      substrings  TEXT    NOT NULL,                         -- newline-separated; any one may be present
       min_amount  INTEGER NOT NULL CHECK (min_amount >= 0), -- inclusive cents
       max_amount  INTEGER NOT NULL CHECK (max_amount >= 0), -- inclusive cents
       type        TEXT    NOT NULL CHECK (type IN ('debit', 'credit')),
       category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+      preset_key  TEXT,
       CHECK (min_amount <= max_amount)
     );
 
     CREATE INDEX IF NOT EXISTS idx_rules_category ON rules(category_id);
   \`);
 
+  if (tableExists(database, "rules") && !columnExists(database, "rules", "preset_key")) {
+    database.exec("ALTER TABLE rules ADD COLUMN preset_key TEXT;");
+  }
+
+  database.exec(\`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_rules_preset_key
+      ON rules(preset_key) WHERE preset_key IS NOT NULL;
+  \`);
+
   seedPresetCategories(database);
+  seedPresetRules(database);
+  classifyUncategorized(database);
 }
 
-/** Drop blank lines and surrounding space. Every remaining line must be present. */
+/** Drop blank lines and surrounding space. Any remaining line can match. */
 function normalizeSubstrings(raw) {
   const lines = String(raw ?? "")
     .split(/\\r?\\n/)
@@ -936,7 +1114,9 @@ const handlers = {
             $amount: txn.amount,
             $type: txn.type,
             $description: txn.description ?? "",
-            $categoryId: txn.categoryId ?? null,
+            $categoryId:
+              txn.categoryId ??
+              categoryIdForTransaction(db, txn.description, txn.amount, txn.type),
             $accountId: txn.accountId ?? null,
             $importId: importId,
           },
@@ -959,7 +1139,9 @@ const handlers = {
         $amount: txn.amount,
         $type: txn.type,
         $description: txn.description ?? "",
-        $categoryId: txn.categoryId ?? null,
+        $categoryId:
+          txn.categoryId ??
+          categoryIdForTransaction(db, txn.description, txn.amount, txn.type),
         $accountId: txn.accountId ?? null,
         $importId: txn.importId,
       },
@@ -1340,8 +1522,8 @@ export async function importDatabase(
 }
 
 /**
- * Delete every saved row and recreate the schema. Preset categories are seeded
- * again by the same startup migration.
+ * Delete every saved row and recreate the schema. Preset categories and rules
+ * are seeded again by the same startup migration.
  */
 export async function resetDatabase(): Promise<void> {
   const client = await getClient();

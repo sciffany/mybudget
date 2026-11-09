@@ -223,11 +223,11 @@ export default function RulesPage() {
               placeholder={"FAIRPRICE\nNTUC"}
               rows={4}
               disabled={saving}
-              className="rounded-md border border-zinc-300 bg-white px-3 py-2 font-mono text-sm dark:border-zinc-700 dark:bg-zinc-950"
+              className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
             />
             <span className="text-zinc-500">
               One per line. A transaction matches when its description contains
-              every line.
+              any line.
             </span>
           </label>
           <label className="flex max-w-sm flex-col gap-1 text-sm">
@@ -347,7 +347,7 @@ export default function RulesPage() {
               <li key={rule.id} className="flex items-start justify-between gap-4 py-3 text-sm">
                 <div className="min-w-0 flex-1">
                   <p className="font-medium">{rule.category_name}</p>
-                  <p className="mt-1 whitespace-pre-wrap font-mono">{rule.substrings}</p>
+                  <p className="mt-1 whitespace-pre-wrap">{rule.substrings}</p>
                   <p className="mt-1 text-zinc-500">
                     {formatCents(rule.min_amount)} – {formatCents(rule.max_amount)}
                     {" · "}

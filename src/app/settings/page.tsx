@@ -72,7 +72,7 @@ export default function SettingsPage() {
       const { resetDatabase } = await import("@/lib/db");
       await resetDatabase();
       setConfirmReset(false);
-      report("danger", "All data deleted. Preset categories restored.");
+      report("danger", "All data deleted. Preset categories and rules restored.");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -123,7 +123,7 @@ export default function SettingsPage() {
         </h2>
         <p className="text-sm text-zinc-600 dark:text-zinc-400">
           Delete every account, transaction, import, and rule stored in this
-          browser. Preset categories are put back. Download a backup first if
+          browser. Preset categories and rules are put back. Download a backup first if
           you want to keep this data.
         </p>
         {confirmReset ? (
