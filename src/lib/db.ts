@@ -133,12 +133,34 @@ export interface UmbrellaCategoryRow {
   name: string;
 }
 
+/** Rows that disappear or lose their category when an umbrella category is deleted. */
+export interface UmbrellaUsage {
+  categories: number;
+  transactions: number;
+  rules: number;
+}
+
+/** Every flow the `categories.flow` check constraint accepts. */
+export const FLOWS: readonly Flow[] = ["income", "expense", "transfer"];
+
+export const FLOW_LABELS: Record<Flow, string> = {
+  income: "Income",
+  expense: "Expense",
+  transfer: "Transfer",
+};
+
 /** A category assigned to transactions. Each one belongs to one umbrella category. */
 export interface CategoryRow {
   id: number;
   name: string;
   flow: Flow;
   umbrella_id: number;
+}
+
+/** Rows that lose this category, or are deleted with it. */
+export interface CategoryUsage {
+  transactions: number;
+  rules: number;
 }
 
 export interface AccountRow {
@@ -515,6 +537,59 @@ function requireCents(value, label) {
   return value;
 }
 
+function requireName(raw, label) {
+  const name = String(raw ?? "").trim();
+  if (!name) throw new Error("Enter a name for the " + label + ".");
+  return name;
+}
+
+function requireFlow(flow) {
+  if (flow !== "income" && flow !== "expense" && flow !== "transfer") {
+    throw new Error("Choose income, expense, or transfer.");
+  }
+  return flow;
+}
+
+function rethrowUnique(err, message) {
+  const text = (err && err.message) || String(err);
+  if (text.includes("UNIQUE constraint failed")) throw new Error(message);
+  throw err;
+}
+
+function umbrellaById(id) {
+  if (!Number.isInteger(id) || id <= 0) throw new Error("Umbrella category not found.");
+  const row = db.exec({
+    sql: "SELECT id, name FROM umbrella_categories WHERE id = $id",
+    bind: { $id: id },
+    rowMode: "object",
+    returnValue: "resultRows",
+  })[0];
+  if (!row) throw new Error("Umbrella category not found.");
+  return row;
+}
+
+function categoryById(id) {
+  if (!Number.isInteger(id) || id <= 0) throw new Error("Category not found.");
+  const row = db.exec({
+    sql: "SELECT id, name, flow, umbrella_id FROM categories WHERE id = $id",
+    bind: { $id: id },
+    rowMode: "object",
+    returnValue: "resultRows",
+  })[0];
+  if (!row) throw new Error("Category not found.");
+  return row;
+}
+
+function countValue(sql, id) {
+  const row = db.exec({
+    sql,
+    bind: { $id: id },
+    rowMode: "object",
+    returnValue: "resultRows",
+  })[0];
+  return row ? Number(row.n) : 0;
+}
+
 function bindRule(rule) {
   const substrings = normalizeSubstrings(rule.substrings);
   const minAmount = requireCents(rule.minAmount, "Minimum amount");
@@ -581,10 +656,15 @@ const handlers = {
     return lastId();
   },
   insertUmbrellaCategory(cat) {
-    db.exec({
-      sql: "INSERT INTO umbrella_categories (name) VALUES ($name)",
-      bind: { $name: cat.name },
-    });
+    const name = requireName(cat.name, "umbrella category");
+    try {
+      db.exec({
+        sql: "INSERT INTO umbrella_categories (name) VALUES ($name)",
+        bind: { $name: name },
+      });
+    } catch (err) {
+      rethrowUnique(err, 'An umbrella category named "' + name + '" already exists.');
+    }
     return lastId();
   },
   listUmbrellaCategories() {
@@ -594,11 +674,62 @@ const handlers = {
       returnValue: "resultRows",
     });
   },
-  insertCategory(cat) {
+  updateUmbrellaCategory(cat) {
+    umbrellaById(cat.id);
+    const name = requireName(cat.name, "umbrella category");
+    try {
+      db.exec({
+        sql: "UPDATE umbrella_categories SET name = $name WHERE id = $id",
+        bind: { $name: name, $id: cat.id },
+      });
+    } catch (err) {
+      rethrowUnique(err, 'An umbrella category named "' + name + '" already exists.');
+    }
+    return { id: cat.id, name };
+  },
+  countUmbrellaUsage(id) {
+    umbrellaById(id);
+    return {
+      categories: countValue(
+        "SELECT COUNT(*) AS n FROM categories WHERE umbrella_id = $id",
+        id,
+      ),
+      transactions: countValue(
+        \`SELECT COUNT(*) AS n
+          FROM transactions t
+          JOIN categories c ON c.id = t.category_id
+          WHERE c.umbrella_id = $id\`,
+        id,
+      ),
+      rules: countValue(
+        \`SELECT COUNT(*) AS n
+          FROM rules r
+          JOIN categories c ON c.id = r.category_id
+          WHERE c.umbrella_id = $id\`,
+        id,
+      ),
+    };
+  },
+  deleteUmbrellaCategory(id) {
+    umbrellaById(id);
     db.exec({
-      sql: "INSERT INTO categories (name, flow, umbrella_id) VALUES ($name, $flow, $umbrellaId)",
-      bind: { $name: cat.name, $flow: cat.flow, $umbrellaId: cat.umbrellaId },
+      sql: "DELETE FROM umbrella_categories WHERE id = $id",
+      bind: { $id: id },
     });
+    return null;
+  },
+  insertCategory(cat) {
+    const name = requireName(cat.name, "category");
+    const flow = requireFlow(cat.flow);
+    const umbrellaId = umbrellaById(cat.umbrellaId).id;
+    try {
+      db.exec({
+        sql: "INSERT INTO categories (name, flow, umbrella_id) VALUES ($name, $flow, $umbrellaId)",
+        bind: { $name: name, $flow: flow, $umbrellaId: umbrellaId },
+      });
+    } catch (err) {
+      rethrowUnique(err, '"' + name + '" already exists under this umbrella category.');
+    }
     return lastId();
   },
   listCategories() {
@@ -607,6 +738,44 @@ const handlers = {
       rowMode: "object",
       returnValue: "resultRows",
     });
+  },
+  updateCategory(cat) {
+    categoryById(cat.id);
+    const name = requireName(cat.name, "category");
+    const flow = requireFlow(cat.flow);
+    const umbrellaId = umbrellaById(cat.umbrellaId).id;
+    try {
+      db.exec({
+        sql: \`UPDATE categories
+              SET name = $name, flow = $flow, umbrella_id = $umbrellaId
+              WHERE id = $id\`,
+        bind: { $name: name, $flow: flow, $umbrellaId: umbrellaId, $id: cat.id },
+      });
+    } catch (err) {
+      rethrowUnique(err, '"' + name + '" already exists under this umbrella category.');
+    }
+    return { id: cat.id, name, flow, umbrella_id: umbrellaId };
+  },
+  countCategoryUsage(id) {
+    categoryById(id);
+    return {
+      transactions: countValue(
+        "SELECT COUNT(*) AS n FROM transactions WHERE category_id = $id",
+        id,
+      ),
+      rules: countValue(
+        "SELECT COUNT(*) AS n FROM rules WHERE category_id = $id",
+        id,
+      ),
+    };
+  },
+  deleteCategory(id) {
+    categoryById(id);
+    db.exec({
+      sql: "DELETE FROM categories WHERE id = $id",
+      bind: { $id: id },
+    });
+    return null;
   },
   insertAccount(acc) {
     db.exec({
@@ -994,6 +1163,34 @@ export async function listUmbrellaCategories(): Promise<UmbrellaCategoryRow[]> {
   return client.call<UmbrellaCategoryRow[]>("listUmbrellaCategories");
 }
 
+/** Rename an umbrella category. Returns the stored row. */
+export async function updateUmbrellaCategory(
+  id: number,
+  cat: NewUmbrellaCategory,
+): Promise<UmbrellaCategoryRow> {
+  const client = await getClient();
+  return client.call<UmbrellaCategoryRow>("updateUmbrellaCategory", [{ id, ...cat }]);
+}
+
+/**
+ * How many categories belong to this umbrella, and how many transactions and
+ * rules point at those categories.
+ */
+export async function countUmbrellaUsage(id: number): Promise<UmbrellaUsage> {
+  const client = await getClient();
+  return client.call<UmbrellaUsage>("countUmbrellaUsage", [id]);
+}
+
+/**
+ * Delete an umbrella category and every category under it. Transactions that
+ * used those categories stay, with `category_id` cleared. Rules that assigned
+ * them are deleted.
+ */
+export async function deleteUmbrellaCategory(id: number): Promise<void> {
+  const client = await getClient();
+  await client.call<null>("deleteUmbrellaCategory", [id]);
+}
+
 /** Insert a category under an umbrella category and return its new row id. */
 export async function insertCategory(cat: NewCategory): Promise<number> {
   const client = await getClient();
@@ -1004,6 +1201,27 @@ export async function insertCategory(cat: NewCategory): Promise<number> {
 export async function listCategories(): Promise<CategoryRow[]> {
   const client = await getClient();
   return client.call<CategoryRow[]>("listCategories");
+}
+
+/** Rename a category, change its flow, or move it under another umbrella. */
+export async function updateCategory(id: number, cat: NewCategory): Promise<CategoryRow> {
+  const client = await getClient();
+  return client.call<CategoryRow>("updateCategory", [{ id, ...cat }]);
+}
+
+/** How many transactions use this category, and how many rules assign it. */
+export async function countCategoryUsage(id: number): Promise<CategoryUsage> {
+  const client = await getClient();
+  return client.call<CategoryUsage>("countCategoryUsage", [id]);
+}
+
+/**
+ * Delete a category. Linked transactions stay, with `category_id` cleared.
+ * Rules that assigned it are deleted.
+ */
+export async function deleteCategory(id: number): Promise<void> {
+  const client = await getClient();
+  await client.call<null>("deleteCategory", [id]);
 }
 
 /** Insert an account and return its new row id. */
