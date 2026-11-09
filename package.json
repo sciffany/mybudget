@@ -2,6 +2,9 @@
   "name": "mybudget",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=24"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -9,7 +12,9 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@sqlite.org/sqlite-wasm": "^3.54.1-build1",
     "next": "16.4.5",
+    "pdfjs-dist": "^4.10.38",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
