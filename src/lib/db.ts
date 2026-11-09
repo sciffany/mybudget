@@ -84,10 +84,12 @@ const PRESET_CATEGORY_GROUPS: readonly {
  * Rules created on startup when that preset is missing. A transaction matches
  * when its description contains any substring (ignoring letter case), the
  * amount falls in the range, and the direction matches. Income categories are
- * credits; the rest are debits. The range covers any amount. Substrings from
- * this list that are missing on an existing preset rule are appended, unless
- * that substring already belongs to another category. Other edits stay in
- * place. A deleted preset is created again.
+ * credits. Transfer has one rule per direction. The rest are debits. The range
+ * covers any amount. Each preset has its own key, so two rules for the same
+ * category stay separate. Substrings from this list that are missing on an
+ * existing preset rule are appended, unless that substring already belongs to
+ * another category. Other edits stay in place. A deleted preset is created
+ * again.
  */
 const PRESET_RULE_MIN_CENTS = 0;
 const PRESET_RULE_MAX_CENTS = 99_999_999_99;
@@ -99,14 +101,14 @@ const PRESET_RULES: readonly {
   substrings: readonly string[];
 }[] = [
   {
-    key: "transfer",
+    key: "transfer-debit",
     umbrella: "Transfer",
     category: "Transfer",
     type: "debit",
     substrings: ["Funds Transfer TOP-UP TO PAYLAH!"],
   },
   {
-    key: "transfer",
+    key: "transfer-credit",
     umbrella: "Transfer",
     category: "Transfer",
     type: "credit",
@@ -492,7 +494,56 @@ function seedPresetAccounts(database) {
   }
 }
 
+/**
+ * Older builds stored both Transfer presets on one rule under the key
+ * "transfer". Point that row at the preset matching its direction and drop
+ * substrings that belong only to the other direction so seeding can create it.
+ */
+function splitLegacyTransferPreset(database) {
+  const rows = database.exec({
+    sql: "SELECT id, substrings, type FROM rules WHERE preset_key = $presetKey",
+    bind: { $presetKey: "transfer" },
+    rowMode: "object",
+    returnValue: "resultRows",
+  });
+  if (rows.length === 0) return;
+  const rule = rows[0];
+  const debitPreset = PRESET_RULES.find((preset) => preset.key === "transfer-debit");
+  const creditPreset = PRESET_RULES.find((preset) => preset.key === "transfer-credit");
+  const debitKeys = new Set(
+    (debitPreset ? debitPreset.substrings : []).map((line) =>
+      String(line).trim().toLowerCase(),
+    ),
+  );
+  const creditKeys = new Set(
+    (creditPreset ? creditPreset.substrings : []).map((line) =>
+      String(line).trim().toLowerCase(),
+    ),
+  );
+  const lines = String(rule.substrings)
+    .split(/\\r?\\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const foreign = rule.type === "credit" ? debitKeys : creditKeys;
+  const own = rule.type === "credit" ? creditKeys : debitKeys;
+  const kept = lines.filter((line) => {
+    const key = line.toLowerCase();
+    return !(foreign.has(key) && !own.has(key));
+  });
+  database.exec({
+    sql: \`UPDATE rules
+          SET substrings = $substrings, preset_key = $presetKey
+          WHERE id = $id\`,
+    bind: {
+      $substrings: kept.join("\\n"),
+      $presetKey: rule.type === "credit" ? "transfer-credit" : "transfer-debit",
+      $id: rule.id,
+    },
+  });
+}
+
 function seedPresetRules(database) {
+  splitLegacyTransferPreset(database);
   for (const preset of PRESET_RULES) {
     const rows = database.exec({
       sql: \`SELECT c.id
