@@ -725,32 +725,21 @@ function learnedRule(database, categoryId, type) {
   return rows[0] ?? null;
 }
 
-/** A transaction number is at least this many digits in a row. */
-const MIN_TRANSACTION_NUMBER_LENGTH = 8;
-
 /**
- * Drop a transaction number: a long run of digits, including a short letter
- * prefix written against it, as in IPS75843950326312946. Shorter numbers stay.
+ * Drop an IPS transaction number, as in IPS75843950326312946.
+ * Phone numbers and other digits stay.
  */
 function withoutTransactionNumber(description) {
-  const transactionNumber = new RegExp(
-    "[A-Za-z]{1,6}\\\\d{" +
-      MIN_TRANSACTION_NUMBER_LENGTH +
-      ",}|\\\\d{" +
-      MIN_TRANSACTION_NUMBER_LENGTH +
-      ",}",
-    "g",
-  );
   return description
-    .replace(transactionNumber, " ")
+    .replace(/\\bIPS\\d+/gi, " ")
     .replace(/[ \\t]{2,}/g, " ")
     .trim();
 }
 
 /**
  * One description becomes one substring line. Blank descriptions are skipped.
- * A transaction number is left out so the next transaction, with the next
- * number, still matches.
+ * An IPS transaction number is left out so the next transaction still matches.
+ * Phone numbers stay.
  */
 function descriptionNeedles(descriptions) {
   const needles = [];
@@ -1434,8 +1423,8 @@ const handlers = {
   },
   /**
    * Assign \`categoryId\` to the given transactions. Each description is saved
-   * as a substring of that category, leaving out a transaction number such as
-   * IPS75843950326312946. Other uncategorized transactions are then categorized
+   * as a substring of that category, leaving out an IPS transaction number such as
+   * IPS75843950326312946. Phone numbers stay. Other uncategorized transactions are then categorized
    * from the rules. Pass a null category to clear the selection without
    * learning a description.
    */
@@ -1955,8 +1944,8 @@ export async function runRules(): Promise<number> {
 /**
  * Assign `categoryId` to these transactions and remember each description
  * as a substring of that category, so later transactions with the same
- * description are categorized automatically. A transaction number such as
- * IPS75843950326312946 is left out of the saved substring. Pass `null` to clear
+ * description are categorized automatically. An IPS transaction number such as
+ * IPS75843950326312946 is left out of the saved substring. Phone numbers stay. Pass `null` to clear
  * the category without saving a description. Returns the full transaction list.
  */
 export async function categorizeTransactions(
