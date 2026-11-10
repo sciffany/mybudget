@@ -47,7 +47,7 @@ const PRESET_CATEGORY_GROUPS: readonly {
   {
     umbrella: "Daily Expenses",
     flow: "expense",
-    categories: ["Food", "Transportation", "Housing", "Utility"],
+    categories: ["Food", "Transportation", "Housing", "Utility", "Health"],
   },
   {
     umbrella: "Special Expenses",
@@ -133,7 +133,7 @@ const PRESET_RULES: readonly {
     umbrella: "Planning",
     category: "Investment",
     type: "debit",
-    substrings: ["Investment", "iFAST"],
+    substrings: ["Investment", "iFAST", "IBKR", "Moomoo"],
   },
   {
     key: "interest",
@@ -157,6 +157,13 @@ const PRESET_RULES: readonly {
     substrings: ["Shopee"],
   },
   {
+    key: "health",
+    umbrella: "Daily Expenses",
+    category: "Health",
+    type: "debit",
+    substrings: ["Watsons"],
+  },
+  {
     key: "food",
     umbrella: "Daily Expenses",
     category: "Food",
@@ -178,6 +185,9 @@ const PRESET_RULES: readonly {
       "Donut",
       "Cheers",
       "Ntuc",
+      "Fairprice",
+      "Kopitiam",
+      "Sheng Siong",
       "Hockhua",
       "Yong Tau",
       "Jing Fish",
@@ -198,6 +208,8 @@ const PRESET_RULES: readonly {
       "Jiabao",
       "Maxius",
       "Causeway",
+      "18chefs",
+      "Nan Yang",
     ],
   },
   {
@@ -237,7 +249,7 @@ const PRESET_RULES: readonly {
     substrings: ["Italki", "Duolingo", "Sport"],
   },
   {
-    key: "travel",
+    key: "travel-debit",
     umbrella: "Special Expenses",
     category: "Travel",
     type: "debit",
@@ -250,6 +262,7 @@ const PRESET_RULES: readonly {
       "KRW",
       "Youtrip",
       "You tech",
+      "Jetstar",
     ],
   },
   {
@@ -266,6 +279,7 @@ const PRESET_RULES: readonly {
       "KRW",
       "Youtrip",
       "You tech",
+      "Jetstar",
     ],
   },
 ];

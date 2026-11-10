@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, Suspense, useEffect, useMemo, useState } from "react";
+import { Fragment, Suspense, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { CategoryRow, Flow, TransactionRow, UmbrellaCategoryRow } from "@/lib/db";
 
@@ -62,6 +62,11 @@ type UmbrellaGroup = {
   cents: number;
   categories: CategoryTotal[];
 };
+
+function transactionsHref(month: string, category: string): string {
+  const params = new URLSearchParams({ month, category });
+  return `/?${params.toString()}`;
+}
 
 const FLOW_SUMMARY: readonly { flow: Flow; label: string }[] = [
   { flow: "income", label: "Income" },
@@ -146,6 +151,17 @@ function ReportsView() {
     params.set("month", next);
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }
+
+  function openTransactions(category: string) {
+    router.push(transactionsHref(selected, category));
+  }
+
+  function openOnEnter(event: KeyboardEvent<HTMLTableRowElement>, category: string) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openTransactions(category);
+    }
   }
 
   const report = useMemo(() => {
@@ -287,7 +303,14 @@ function ReportsView() {
                         </td>
                       </tr>
                       {group.categories.map((category) => (
-                        <tr key={category.key}>
+                        <tr
+                          key={category.key}
+                          role="link"
+                          tabIndex={0}
+                          onClick={() => openTransactions(category.key)}
+                          onKeyDown={(event) => openOnEnter(event, category.key)}
+                          className="cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
+                        >
                           <td className="whitespace-nowrap px-2 py-1 pl-6 text-zinc-700 dark:text-zinc-300">
                             {category.name}
                           </td>
@@ -300,7 +323,13 @@ function ReportsView() {
                       ))}
                     </Fragment>
                   ))}
-                  <tr className="border-t border-zinc-200 font-semibold dark:border-zinc-800">
+                  <tr
+                    role="link"
+                    tabIndex={0}
+                    onClick={() => openTransactions("none")}
+                    onKeyDown={(event) => openOnEnter(event, "none")}
+                    className="cursor-pointer border-t border-zinc-200 font-semibold hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/60"
+                  >
                     <td className="whitespace-nowrap px-2 py-1">Unclassified</td>
                     <td
                       className={`whitespace-nowrap px-2 py-1 text-right ${amountClass(report.unclassified)}`}
