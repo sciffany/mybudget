@@ -63,6 +63,7 @@ const PRESET_CATEGORY_GROUPS: readonly {
       "Shopping",
       "Travel",
       "Enrichment",
+      "Gift",
     ],
   },
   {
@@ -224,6 +225,7 @@ const PRESET_RULES: readonly {
       "Causeway",
       "18chefs",
       "Nan Yang",
+      "Mercimarcel",
     ],
   },
   {
