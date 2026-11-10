@@ -166,6 +166,13 @@ const PRESET_RULES: readonly {
     substrings: ["Watsons"],
   },
   {
+    key: "donation",
+    umbrella: "Special Expenses",
+    category: "Donation",
+    type: "debit",
+    substrings: ["Donation", "Charity", "Myriad Australia"],
+  },
+  {
     key: "food",
     umbrella: "Daily Expenses",
     category: "Food",
@@ -185,6 +192,11 @@ const PRESET_RULES: readonly {
       "Bread",
       "Pasta",
       "Donut",
+      "Sushi",
+      "Ishiro",
+      "F&B",
+      "Prata",
+      "Old Chang",
       "Cheers",
       "Ntuc",
       "Fairprice",
@@ -360,7 +372,12 @@ export interface UmbrellaUsage {
 }
 
 /** Every flow the `categories.flow` check constraint accepts. */
-export const FLOWS: readonly Flow[] = ["income", "expense", "transfer", "future"];
+export const FLOWS: readonly Flow[] = [
+  "income",
+  "expense",
+  "transfer",
+  "future",
+];
 
 export const FLOW_LABELS: Record<Flow, string> = {
   income: "Income",
