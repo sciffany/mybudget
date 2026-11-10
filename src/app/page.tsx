@@ -16,6 +16,15 @@ const fieldClass =
   "w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950";
 const rowSelectClass =
   "w-full max-w-44 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-950";
+const rowDateClass =
+  "rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-950";
+
+function sortTransactions(list: TransactionRow[]): TransactionRow[] {
+  return [...list].sort((a, b) => {
+    if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+    return b.id - a.id;
+  });
+}
 
 function formatMonth(yearMonth: string): string {
   const [year, month] = yearMonth.split("-").map(Number);
@@ -92,6 +101,7 @@ function TransactionsView() {
   const [assignCategory, setAssignCategory] = useState("");
   const [categorizing, setCategorizing] = useState(false);
   const [notice, setNotice] = useState("");
+  const [savingDateId, setSavingDateId] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -283,6 +293,43 @@ function TransactionsView() {
     if (!Number.isInteger(categoryId) || categoryId <= 0) return;
     const ok = await assignTo([...selected], categoryId);
     if (ok) setSelected(new Set());
+  }
+
+  async function handleDateChange(id: number, date: string) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setRows((current) => (current ? [...current] : current));
+      return;
+    }
+    const current = rows?.find((t) => t.id === id);
+    if (!current || current.date === date) return;
+    setSavingDateId(id);
+    setError("");
+    const previousDate = current.date;
+    setRows((list) =>
+      list
+        ? sortTransactions(list.map((t) => (t.id === id ? { ...t, date } : t)))
+        : list,
+    );
+    try {
+      const { updateTransactionDate } = await import("@/lib/db");
+      const stored = await updateTransactionDate(id, date);
+      setRows((list) =>
+        list
+          ? sortTransactions(list.map((t) => (t.id === id ? { ...t, date: stored } : t)))
+          : list,
+      );
+    } catch (e) {
+      setRows((list) =>
+        list
+          ? sortTransactions(
+              list.map((t) => (t.id === id ? { ...t, date: previousDate } : t)),
+            )
+          : list,
+      );
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingDateId(null);
+    }
   }
 
   async function handleDelete() {
@@ -487,7 +534,14 @@ function TransactionsView() {
                       />
                     </td>
                     <td className="whitespace-nowrap px-2 py-1 align-top">
-                      {t.date}
+                      <input
+                        type="date"
+                        value={t.date}
+                        onChange={(e) => void handleDateChange(t.id, e.target.value)}
+                        disabled={savingDateId === t.id || deleting || categorizing}
+                        aria-label={`Date for ${t.description || t.date}`}
+                        className={rowDateClass}
+                      />
                     </td>
                     <td className="px-2 py-1 align-top">{t.description}</td>
                     <td

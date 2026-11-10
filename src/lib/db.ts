@@ -140,7 +140,7 @@ const PRESET_RULES: readonly {
     umbrella: "Income",
     category: "Interest",
     type: "credit",
-    substrings: ["Interest"],
+    substrings: ["Interest", "cashback"],
   },
   {
     key: "salary",
@@ -193,6 +193,11 @@ const PRESET_RULES: readonly {
       "Chindamani",
       "Pu tien",
       "Toast",
+      "Tea",
+      "Shake shack",
+      "Jiabao",
+      "Maxius",
+      "Causeway",
     ],
   },
   {
@@ -236,7 +241,32 @@ const PRESET_RULES: readonly {
     umbrella: "Special Expenses",
     category: "Travel",
     type: "debit",
-    substrings: ["Klook", "Trip.com", "Airbnb", "Agoda", "Booking.com", "KRW"],
+    substrings: [
+      "Klook",
+      "Trip.com",
+      "Airbnb",
+      "Agoda",
+      "Booking.com",
+      "KRW",
+      "Youtrip",
+      "You tech",
+    ],
+  },
+  {
+    key: "travel-credit",
+    umbrella: "Special Expenses",
+    category: "Travel",
+    type: "credit",
+    substrings: [
+      "Klook",
+      "Trip.com",
+      "Airbnb",
+      "Agoda",
+      "Booking.com",
+      "KRW",
+      "Youtrip",
+      "You tech",
+    ],
   },
 ];
 
@@ -695,12 +725,40 @@ function learnedRule(database, categoryId, type) {
   return rows[0] ?? null;
 }
 
-/** One description becomes one substring line. Blank descriptions are skipped. */
+/** A transaction number is at least this many digits in a row. */
+const MIN_TRANSACTION_NUMBER_LENGTH = 8;
+
+/**
+ * Drop a transaction number: a long run of digits, including a short letter
+ * prefix written against it, as in IPS75843950326312946. Shorter numbers stay.
+ */
+function withoutTransactionNumber(description) {
+  const transactionNumber = new RegExp(
+    "[A-Za-z]{1,6}\\\\d{" +
+      MIN_TRANSACTION_NUMBER_LENGTH +
+      ",}|\\\\d{" +
+      MIN_TRANSACTION_NUMBER_LENGTH +
+      ",}",
+    "g",
+  );
+  return description
+    .replace(transactionNumber, " ")
+    .replace(/[ \\t]{2,}/g, " ")
+    .trim();
+}
+
+/**
+ * One description becomes one substring line. Blank descriptions are skipped.
+ * A transaction number is left out so the next transaction, with the next
+ * number, still matches.
+ */
 function descriptionNeedles(descriptions) {
   const needles = [];
   const seen = new Set();
   for (const raw of descriptions) {
-    const line = String(raw ?? "").replace(/[\\r\\n]+/g, " ").trim();
+    const line = withoutTransactionNumber(
+      String(raw ?? "").replace(/[\\r\\n]+/g, " ").trim(),
+    );
     const key = line.toLowerCase();
     if (!key || seen.has(key)) continue;
     seen.add(key);
@@ -754,7 +812,7 @@ function removeExactSubstring(database, exceptId, key) {
   }
 }
 
-/** Add each full description as a substring of the category's matching rule. */
+/** Add each description, without a transaction number, as a substring of the category's matching rule. */
 function rememberDescriptions(database, categoryId, type, descriptions) {
   const needles = descriptionNeedles(descriptions);
   if (needles.length === 0) return;
@@ -1140,6 +1198,25 @@ function storedRule(id, bound) {
   };
 }
 
+/** Accept a real calendar date stored as \`YYYY-MM-DD\`. */
+function requireIsoDate(value) {
+  const date = String(value ?? "").trim();
+  const match = /^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(date);
+  if (!match) throw new Error("Enter a date as YYYY-MM-DD.");
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  if (
+    utc.getUTCFullYear() !== year ||
+    utc.getUTCMonth() !== month - 1 ||
+    utc.getUTCDate() !== day
+  ) {
+    throw new Error("Enter a real calendar date.");
+  }
+  return date;
+}
+
 const ready = (async () => {
   sqlite3 = await sqlite3InitModule();
   pool = await sqlite3.installOpfsSAHPoolVfs({ directory: VFS_DIR });
@@ -1357,9 +1434,10 @@ const handlers = {
   },
   /**
    * Assign \`categoryId\` to the given transactions. Each description is saved
-   * in full as a substring of that category, then other uncategorized
-   * transactions are categorized from the rules. Pass a null category to clear
-   * the selection without learning a description.
+   * as a substring of that category, leaving out a transaction number such as
+   * IPS75843950326312946. Other uncategorized transactions are then categorized
+   * from the rules. Pass a null category to clear the selection without
+   * learning a description.
    */
   categorizeTransactions(payload) {
     const ids = [];
@@ -1538,6 +1616,24 @@ const handlers = {
       },
     });
     return lastId();
+  },
+  /** Replace a transaction's date. \`date\` is an ISO \`YYYY-MM-DD\` calendar day. */
+  updateTransactionDate(payload) {
+    const id = typeof payload.id === "number" ? payload.id : Number(payload.id);
+    if (!Number.isInteger(id) || id <= 0) throw new Error("Transaction not found.");
+    const date = requireIsoDate(payload.date);
+    const existing = db.exec({
+      sql: "SELECT id FROM transactions WHERE id = $id",
+      bind: { $id: id },
+      rowMode: "object",
+      returnValue: "resultRows",
+    })[0];
+    if (!existing) throw new Error("Transaction not found.");
+    db.exec({
+      sql: "UPDATE transactions SET date = $date WHERE id = $id",
+      bind: { $date: date, $id: id },
+    });
+    return date;
   },
   listTransactions() {
     return db.exec({
@@ -1857,10 +1953,11 @@ export async function runRules(): Promise<number> {
 }
 
 /**
- * Assign `categoryId` to these transactions and remember each full description
+ * Assign `categoryId` to these transactions and remember each description
  * as a substring of that category, so later transactions with the same
- * description are categorized automatically. Pass `null` to clear the category
- * without saving a description. Returns the full transaction list.
+ * description are categorized automatically. A transaction number such as
+ * IPS75843950326312946 is left out of the saved substring. Pass `null` to clear
+ * the category without saving a description. Returns the full transaction list.
  */
 export async function categorizeTransactions(
   ids: number[],
@@ -1917,6 +2014,15 @@ export async function saveImport(imp: NewImport): Promise<number> {
 export async function insertTransaction(txn: NewTransaction): Promise<number> {
   const client = await getClient();
   return client.call<number>("insertTransaction", [txn]);
+}
+
+/** Replace a transaction's date. `date` is an ISO `YYYY-MM-DD` calendar day. */
+export async function updateTransactionDate(
+  id: number,
+  date: string,
+): Promise<string> {
+  const client = await getClient();
+  return client.call<string>("updateTransactionDate", [{ id, date }]);
 }
 
 /** Return all transactions, newest first. */
