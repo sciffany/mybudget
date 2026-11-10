@@ -72,6 +72,7 @@ const FLOW_SUMMARY: readonly { flow: Flow; label: string }[] = [
   { flow: "income", label: "Income" },
   { flow: "transfer", label: "Transfer" },
   { flow: "expense", label: "Expense" },
+  { flow: "future", label: "Future" },
 ];
 
 const pageShell =
@@ -168,7 +169,12 @@ function ReportsView() {
     const umbrellaById = new Map((umbrellas ?? []).map((row) => [row.id, row]));
     const known = new Map((categories ?? []).map((row) => [row.id, row]));
     const totals = new Map<number, number>();
-    const flowTotals: Record<Flow, number> = { income: 0, expense: 0, transfer: 0 };
+    const flowTotals: Record<Flow, number> = {
+      income: 0,
+      expense: 0,
+      transfer: 0,
+      future: 0,
+    };
     let unclassified = 0;
 
     for (const transaction of transactions ?? []) {
@@ -252,7 +258,7 @@ function ReportsView() {
 
         {loaded && (
           <>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
               {report.summary.map((item) => (
                 <div
                   key={item.flow}

@@ -36,8 +36,10 @@ const VFS_DIR = ".mybudget-sqlite";
 
 /**
  * Categories created on every startup when they are missing. Flow follows the
- * umbrella: spending and planning are expenses, Transfer is a transfer, and
- * Income is income. Existing rows with the same name are left alone.
+ * umbrella: spending is an expense, Transfer is a transfer, Income is income,
+ * and planning (Investment, Insurance) is future. Existing rows with the same
+ * name are left alone. The first time the future flow is added, categories
+ * named Investment and Insurance are moved onto it.
  */
 const PRESET_CATEGORY_GROUPS: readonly {
   umbrella: string;
@@ -75,7 +77,7 @@ const PRESET_CATEGORY_GROUPS: readonly {
   },
   {
     umbrella: "Planning",
-    flow: "expense",
+    flow: "future",
     categories: ["Investment", "Insurance"],
   },
 ];
@@ -133,7 +135,7 @@ const PRESET_RULES: readonly {
     umbrella: "Planning",
     category: "Investment",
     type: "debit",
-    substrings: ["Investment", "iFAST", "IBKR", "Moomoo"],
+    substrings: ["Investment", "iFAST", "IBKR", "Moomoo", "Endowus"],
   },
   {
     key: "interest",
@@ -306,8 +308,8 @@ export interface NewDocument {
 
 /** Debit = money out of the account, credit = money in. */
 export type TransactionType = "debit" | "credit";
-/** Semantic nature of a category: money in, money out, or a move between accounts. */
-export type Flow = "income" | "expense" | "transfer";
+/** Semantic nature of a category: money in, money out, a move between accounts, or money set aside. */
+export type Flow = "income" | "expense" | "transfer" | "future";
 /** Institution/product an account belongs to. */
 export type AccountType =
   | "dbs"
@@ -358,12 +360,13 @@ export interface UmbrellaUsage {
 }
 
 /** Every flow the `categories.flow` check constraint accepts. */
-export const FLOWS: readonly Flow[] = ["income", "expense", "transfer"];
+export const FLOWS: readonly Flow[] = ["income", "expense", "transfer", "future"];
 
 export const FLOW_LABELS: Record<Flow, string> = {
   income: "Income",
   expense: "Expense",
   transfer: "Transfer",
+  future: "Future",
 };
 
 /** A category assigned to transactions. Each one belongs to one umbrella category. */
@@ -531,6 +534,42 @@ function columnExists(database, table, column) {
       returnValue: "resultRows",
     })
     .some((c) => c.name === column);
+}
+
+/**
+ * Older databases only allow income, expense, and transfer. SQLite cannot
+ * change a CHECK in place, so the table is rebuilt once \`future\` is missing.
+ * Investment and Insurance move onto that flow in the same pass.
+ */
+function allowFutureFlow(database) {
+  if (!tableExists(database, "categories")) return;
+  const rows = database.exec({
+    sql: "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'categories'",
+    rowMode: "array",
+    returnValue: "resultRows",
+  });
+  const sql = rows.length ? String(rows[0][0] ?? "") : "";
+  if (sql.includes("'future'")) return;
+  database.exec(\`
+    PRAGMA foreign_keys = OFF;
+    BEGIN;
+    CREATE TABLE categories_new (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT    NOT NULL,
+      flow        TEXT    NOT NULL CHECK (flow IN ('income', 'expense', 'transfer', 'future')),
+      umbrella_id INTEGER NOT NULL REFERENCES umbrella_categories(id) ON DELETE CASCADE,
+      UNIQUE (umbrella_id, name)
+    );
+    INSERT INTO categories_new (id, name, flow, umbrella_id)
+      SELECT id, name,
+             CASE WHEN name IN ('Investment', 'Insurance') THEN 'future' ELSE flow END,
+             umbrella_id
+      FROM categories;
+    DROP TABLE categories;
+    ALTER TABLE categories_new RENAME TO categories;
+    COMMIT;
+    PRAGMA foreign_keys = ON;
+  \`);
 }
 
 function seedPresetCategories(database) {
@@ -1027,7 +1066,7 @@ function migrate(database) {
     CREATE TABLE IF NOT EXISTS categories (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       name        TEXT    NOT NULL,
-      flow        TEXT    NOT NULL CHECK (flow IN ('income', 'expense', 'transfer')),
+      flow        TEXT    NOT NULL CHECK (flow IN ('income', 'expense', 'transfer', 'future')),
       umbrella_id INTEGER NOT NULL REFERENCES umbrella_categories(id) ON DELETE CASCADE,
       UNIQUE (umbrella_id, name)
     );
@@ -1080,6 +1119,7 @@ function migrate(database) {
       ON rules(preset_key) WHERE preset_key IS NOT NULL;
   \`);
 
+  allowFutureFlow(database);
   seedPresetCategories(database);
   seedPresetAccounts(database);
   seedPresetRules(database);
@@ -1112,8 +1152,8 @@ function requireName(raw, label) {
 }
 
 function requireFlow(flow) {
-  if (flow !== "income" && flow !== "expense" && flow !== "transfer") {
-    throw new Error("Choose income, expense, or transfer.");
+  if (flow !== "income" && flow !== "expense" && flow !== "transfer" && flow !== "future") {
+    throw new Error("Choose income, expense, transfer, or future.");
   }
   return flow;
 }
