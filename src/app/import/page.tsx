@@ -158,8 +158,8 @@ export default function ImportPage() {
   }
 
   return (
-    <main className="mx-auto flex max-w-6xl flex-col gap-8 px-6 py-12">
-      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+    <main className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6 sm:gap-8 sm:px-6 sm:py-10">
+      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 dark:border-zinc-800 dark:bg-zinc-900">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
           Import
         </h2>
@@ -192,7 +192,7 @@ export default function ImportPage() {
               />
             </label>
           )}
-          <span className="text-sm text-zinc-600 dark:text-zinc-400">
+          <span className="min-w-0 break-all text-sm text-zinc-600 dark:text-zinc-400">
             {file ? file.name : "No file chosen"}
           </span>
         </div>
@@ -220,7 +220,7 @@ export default function ImportPage() {
       </section>
 
       {txnResult && (
-        <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+        <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 dark:border-zinc-800 dark:bg-zinc-900">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
             Transactions ({txnResult.transactions.length})
           </h2>

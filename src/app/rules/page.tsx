@@ -230,10 +230,10 @@ export default function RulesPage() {
   const busy = saving || busyId !== null || running;
 
   return (
-    <main className="mx-auto flex max-w-6xl flex-col gap-8 px-6 py-12">
+    <main className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6 sm:gap-8 sm:px-6 sm:py-10">
       <section
         ref={editorRef}
-        className="flex scroll-mt-6 flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900"
+        className="flex scroll-mt-6 flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 dark:border-zinc-800 dark:bg-zinc-900"
       >
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
           {editingId === null ? "New rule" : "Edit rule"}
@@ -256,7 +256,7 @@ export default function RulesPage() {
               any line.
             </span>
           </label>
-          <label className="flex max-w-sm flex-col gap-1 text-sm">
+            <label className="flex w-full max-w-sm flex-col gap-1 text-sm">
             <span className="font-medium text-zinc-700 dark:text-zinc-300">
               Category
             </span>
@@ -284,7 +284,7 @@ export default function RulesPage() {
             )}
           </label>
           <div className="flex flex-wrap items-end gap-3">
-            <label className="flex w-40 flex-col gap-1 text-sm">
+            <label className="flex w-full flex-col gap-1 text-sm sm:w-40">
               <span className="font-medium text-zinc-700 dark:text-zinc-300">
                 Minimum
               </span>
@@ -297,7 +297,7 @@ export default function RulesPage() {
                 className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
               />
             </label>
-            <label className="flex w-40 flex-col gap-1 text-sm">
+            <label className="flex w-full flex-col gap-1 text-sm sm:w-40">
               <span className="font-medium text-zinc-700 dark:text-zinc-300">
                 Maximum
               </span>
@@ -310,7 +310,7 @@ export default function RulesPage() {
                 className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
               />
             </label>
-            <label className="flex w-36 flex-col gap-1 text-sm">
+            <label className="flex w-full flex-col gap-1 text-sm sm:w-36">
               <span className="font-medium text-zinc-700 dark:text-zinc-300">
                 Type
               </span>
@@ -348,7 +348,7 @@ export default function RulesPage() {
         )}
       </section>
 
-      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
             Rules{rows ? ` (${rows.length})` : ""}
@@ -383,7 +383,7 @@ export default function RulesPage() {
         {rows && rows.length > 0 && (
           <ul className="divide-y divide-zinc-200 dark:divide-zinc-800">
             {rows.map((rule) => (
-              <li key={rule.id} className="flex items-start justify-between gap-4 py-3 text-sm">
+              <li key={rule.id} className="flex flex-wrap items-start gap-3 py-3 text-sm">
                 <div className="min-w-0 flex-1">
                   <p className="font-medium">{rule.category_name}</p>
                   <p className="mt-1 whitespace-pre-wrap">{rule.substrings}</p>

@@ -138,8 +138,8 @@ export default function AccountsPage() {
   const busy = saving || busyId !== null;
 
   return (
-    <main className="mx-auto flex max-w-6xl flex-col gap-8 px-6 py-12">
-      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+    <main className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6 sm:gap-8 sm:px-6 sm:py-10">
+      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 dark:border-zinc-800 dark:bg-zinc-900">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
           New account
         </h2>
@@ -156,7 +156,7 @@ export default function AccountsPage() {
               className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
             />
           </label>
-          <label className="flex w-44 flex-col gap-1 text-sm">
+          <label className="flex w-full flex-col gap-1 text-sm sm:w-44">
             <span className="font-medium text-zinc-700 dark:text-zinc-300">
               Type
             </span>
@@ -186,7 +186,7 @@ export default function AccountsPage() {
         )}
       </section>
 
-      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 dark:border-zinc-800 dark:bg-zinc-900">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
           Accounts{rows ? ` (${rows.length})` : ""}
         </h2>
@@ -209,7 +209,7 @@ export default function AccountsPage() {
           <ul className="divide-y divide-zinc-200 dark:divide-zinc-800">
             {rows.map((account) => {
               const typeLabel = ACCOUNT_TYPE_LABELS[account.type] ?? account.type;
-              const rowClass = "flex items-center justify-between gap-4 py-3 text-sm";
+              const rowClass = "flex flex-wrap items-center gap-x-3 gap-y-2 py-3 text-sm";
 
               if (editingId === account.id) {
                 return (

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { CategoryRow, TransactionRow, UmbrellaCategoryRow } from "@/lib/db";
 
 const PAGE_SIZE = 200;
@@ -12,9 +13,9 @@ const money = new Intl.NumberFormat("en-SG", {
 });
 
 const fieldClass =
-  "rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950";
+  "w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950";
 const rowSelectClass =
-  "max-w-44 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-950";
+  "w-full max-w-44 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-950";
 
 function formatMonth(yearMonth: string): string {
   const [year, month] = yearMonth.split("-").map(Number);
@@ -49,15 +50,43 @@ function formatAmount(cents: number, type: TransactionRow["type"]): string {
   return type === "debit" ? `-${formatted}` : formatted;
 }
 
+const pageShell =
+  "mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6 sm:gap-8 sm:px-6 sm:py-10";
+
 export default function TransactionsPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className={pageShell}>
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">Loading…</p>
+        </main>
+      }
+    >
+      <TransactionsView />
+    </Suspense>
+  );
+}
+
+function TransactionsView() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const month = searchParams.get("month") ?? "";
+  const category = searchParams.get("category") ?? "";
+  const account = searchParams.get("account") ?? "";
+  const filterKey = `${month}\0${category}\0${account}`;
+
   const [rows, setRows] = useState<TransactionRow[] | null>(null);
   const [error, setError] = useState("");
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [deleting, setDeleting] = useState(false);
-  const [month, setMonth] = useState("");
-  const [category, setCategory] = useState("");
-  const [account, setAccount] = useState("");
+  const [seenFilter, setSeenFilter] = useState(filterKey);
+  if (filterKey !== seenFilter) {
+    setSeenFilter(filterKey);
+    setPage(0);
+    setSelected(new Set());
+  }
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [umbrellas, setUmbrellas] = useState<UmbrellaCategoryRow[]>([]);
   const [assignCategory, setAssignCategory] = useState("");
@@ -158,18 +187,19 @@ export default function TransactionsPage() {
   const rangeStart = filtered.length > 0 ? safePage * PAGE_SIZE + 1 : 0;
   const rangeEnd = Math.min(filtered.length, (safePage + 1) * PAGE_SIZE);
 
-  function applyFilter(setter: (value: string) => void, value: string) {
-    setter(value);
-    setPage(0);
-    setSelected(new Set());
+  function writeFilters(next: { month?: string; category?: string; account?: string }) {
+    const params = new URLSearchParams(searchParams.toString());
+    const values = { month, category, account, ...next };
+    for (const [key, value] of Object.entries(values)) {
+      if (value) params.set(key, value);
+      else params.delete(key);
+    }
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   }
 
   function clearFilters() {
-    setMonth("");
-    setCategory("");
-    setAccount("");
-    setPage(0);
-    setSelected(new Set());
+    writeFilters({ month: "", category: "", account: "" });
   }
 
   function toggleOne(id: number) {
@@ -278,8 +308,8 @@ export default function TransactionsPage() {
   }
 
   return (
-    <main className="mx-auto flex max-w-6xl flex-col gap-8 px-6 py-12">
-      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+    <main className={pageShell}>
+      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 dark:border-zinc-800 dark:bg-zinc-900">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
           Transactions
           {rows
@@ -305,12 +335,12 @@ export default function TransactionsPage() {
 
         {rows && rows.length > 0 && (
           <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-end gap-3">
-              <label className="flex min-w-40 flex-col gap-1 text-sm">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end">
+              <label className="flex min-w-0 flex-col gap-1 text-sm sm:min-w-40">
                 <span className="font-medium text-zinc-700 dark:text-zinc-300">Month</span>
                 <select
                   value={month}
-                  onChange={(e) => applyFilter(setMonth, e.target.value)}
+                  onChange={(e) => writeFilters({ month: e.target.value })}
                   className={fieldClass}
                 >
                   <option value="">All months</option>
@@ -321,11 +351,11 @@ export default function TransactionsPage() {
                   ))}
                 </select>
               </label>
-              <label className="flex min-w-40 flex-col gap-1 text-sm">
+              <label className="flex min-w-0 flex-col gap-1 text-sm sm:min-w-40">
                 <span className="font-medium text-zinc-700 dark:text-zinc-300">Category</span>
                 <select
                   value={category}
-                  onChange={(e) => applyFilter(setCategory, e.target.value)}
+                  onChange={(e) => writeFilters({ category: e.target.value })}
                   className={fieldClass}
                 >
                   <option value="">All categories</option>
@@ -336,11 +366,11 @@ export default function TransactionsPage() {
                   ))}
                 </select>
               </label>
-              <label className="flex min-w-40 flex-col gap-1 text-sm">
+              <label className="flex min-w-0 flex-col gap-1 text-sm sm:min-w-40">
                 <span className="font-medium text-zinc-700 dark:text-zinc-300">Account</span>
                 <select
                   value={account}
-                  onChange={(e) => applyFilter(setAccount, e.target.value)}
+                  onChange={(e) => writeFilters({ account: e.target.value })}
                   className={fieldClass}
                 >
                   <option value="">All accounts</option>

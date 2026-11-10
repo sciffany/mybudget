@@ -1,6 +1,7 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, Suspense, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { CategoryRow, Flow, TransactionRow, UmbrellaCategoryRow } from "@/lib/db";
 
 const money = new Intl.NumberFormat("en-SG", {
@@ -68,12 +69,32 @@ const FLOW_SUMMARY: readonly { flow: Flow; label: string }[] = [
   { flow: "expense", label: "Expense" },
 ];
 
+const pageShell =
+  "mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6 sm:gap-8 sm:px-6 sm:py-10";
+
 export default function ReportsPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className={pageShell}>
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">Loading…</p>
+        </main>
+      }
+    >
+      <ReportsView />
+    </Suspense>
+  );
+}
+
+function ReportsView() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [transactions, setTransactions] = useState<TransactionRow[] | null>(null);
   const [categories, setCategories] = useState<CategoryRow[] | null>(null);
   const [umbrellas, setUmbrellas] = useState<UmbrellaCategoryRow[] | null>(null);
   const [error, setError] = useState("");
-  const [month, setMonth] = useState<string | null>(null);
+  const monthParam = searchParams.get("month");
 
   useEffect(() => {
     let cancelled = false;
@@ -113,9 +134,19 @@ export default function ReportsPage() {
     return { first, last };
   }, [transactions]);
 
-  const selected = month ?? bounds?.last ?? currentMonth();
+  const selected =
+    monthParam && /^\d{4}-\d{2}$/.test(monthParam)
+      ? monthParam
+      : (bounds?.last ?? currentMonth());
   const canGoBack = bounds != null && selected > bounds.first;
   const canGoForward = bounds != null && selected < bounds.last;
+
+  function goToMonth(next: string) {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("month", next);
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }
 
   const report = useMemo(() => {
     const umbrellaById = new Map((umbrellas ?? []).map((row) => [row.id, row]));
@@ -175,21 +206,21 @@ export default function ReportsPage() {
   const loaded = transactions !== null && categories !== null && umbrellas !== null;
 
   return (
-    <main className="mx-auto flex max-w-6xl flex-col gap-8 px-6 py-12">
-      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+    <main className={pageShell}>
+      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="flex items-center justify-between gap-3">
           <button
             type="button"
-            onClick={() => setMonth(shiftMonth(selected, -1))}
+            onClick={() => goToMonth(shiftMonth(selected, -1))}
             disabled={!canGoBack}
             className={navButtonClass}
           >
             Previous
           </button>
-          <h2 className="text-base font-semibold">{formatMonth(selected)}</h2>
+          <h2 className="min-w-0 text-center text-base font-semibold">{formatMonth(selected)}</h2>
           <button
             type="button"
-            onClick={() => setMonth(shiftMonth(selected, 1))}
+            onClick={() => goToMonth(shiftMonth(selected, 1))}
             disabled={!canGoForward}
             className={navButtonClass}
           >

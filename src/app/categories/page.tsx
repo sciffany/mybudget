@@ -339,8 +339,8 @@ export default function CategoriesPage() {
   const loading = umbrellas === null || categories === null;
 
   return (
-    <main className="mx-auto flex max-w-6xl flex-col gap-8 px-6 py-12">
-      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+    <main className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6 sm:gap-8 sm:px-6 sm:py-10">
+      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 dark:border-zinc-800 dark:bg-zinc-900">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
           New umbrella category
         </h2>
@@ -368,7 +368,7 @@ export default function CategoriesPage() {
         )}
       </section>
 
-      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 dark:border-zinc-800 dark:bg-zinc-900">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
           New category
         </h2>
@@ -383,7 +383,7 @@ export default function CategoriesPage() {
               className={fieldClass}
             />
           </label>
-          <label className="flex w-40 flex-col gap-1 text-sm">
+          <label className="flex w-full flex-col gap-1 text-sm sm:w-40">
             <span className="font-medium text-zinc-700 dark:text-zinc-300">Flow</span>
             <select
               value={categoryFlow}
@@ -447,7 +447,7 @@ export default function CategoriesPage() {
         )}
 
         {umbrellas && umbrellas.length === 0 && (
-          <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+          <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="text-sm text-zinc-600 dark:text-zinc-400">
               No umbrella categories yet. Create one above.
             </p>
@@ -461,7 +461,7 @@ export default function CategoriesPage() {
           return (
             <section
               key={umbrella.id}
-              className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900"
+              className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 dark:border-zinc-800 dark:bg-zinc-900"
             >
               {editingUmbrellaId === umbrella.id ? (
                 <form
