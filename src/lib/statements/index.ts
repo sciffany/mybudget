@@ -9,8 +9,9 @@ import { ocbcParser } from "@/lib/statements/ocbc";
 import { paylahParser } from "@/lib/statements/paylah";
 import { extractPdfPages } from "@/lib/statements/pdf";
 import type { ParsedStatement, StatementParser } from "@/lib/statements/types";
+import { uobCreditParser } from "@/lib/statements/uob-credit";
 
-const parsers: StatementParser[] = [paylahParser, ocbcParser, dbsParser];
+const parsers: StatementParser[] = [paylahParser, ocbcParser, dbsParser, uobCreditParser];
 
 export async function parseStatement(
   bytes: Uint8Array,
