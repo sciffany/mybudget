@@ -265,6 +265,7 @@ const PRESET_RULES: readonly {
       "Eleven",
       "Roti",
       "First bowl",
+      "Bapsang",
       "Food",
       "Shun Feng",
       "Tau Foo",
