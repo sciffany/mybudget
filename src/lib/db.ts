@@ -112,7 +112,11 @@ const PRESET_RULES: readonly {
     umbrella: "Transfer",
     category: "Transfer",
     type: "debit",
-    substrings: ["Funds Transfer TOP-UP TO PAYLAH!", "Bill Payment CCC"],
+    substrings: [
+      "Funds Transfer TOP-UP TO PAYLAH!",
+      "Bill Payment CCC",
+      "Bill Payment INB",
+    ],
   },
   {
     key: "transfer-credit",
@@ -177,6 +181,19 @@ const PRESET_RULES: readonly {
     substrings: ["Sala"],
   },
   {
+    key: "entertainment",
+    umbrella: "Special Expenses",
+    category: "Entertainment",
+    type: "debit",
+    substrings: [
+      "Netflix",
+      "Spotify",
+      "Apple Music",
+      "Amazon Prime",
+      "Disney+",
+    ],
+  },
+  {
     key: "shopping-debit",
     umbrella: "Special Expenses",
     category: "Shopping",
@@ -215,6 +232,7 @@ const PRESET_RULES: readonly {
       "Myriad Australia",
       "Children s cancer",
       "Benevity London",
+      "Jamiyah",
     ],
   },
   {
@@ -264,7 +282,8 @@ const PRESET_RULES: readonly {
       "Jing Fish",
       "KFC",
       "Tempura",
-      "Coffee",
+      "Coff",
+      "Spinach",
       "Hoe Peng",
       "Bakery",
       "Pizza",
@@ -284,6 +303,8 @@ const PRESET_RULES: readonly {
       "Mercimarcel",
       "Beard Papa",
       "Molly Malone",
+      "Molly-Malone",
+      "Onigiri",
       "Shrimp",
       "Aburi",
       "Sheng Kee",
@@ -351,6 +372,9 @@ const PRESET_RULES: readonly {
       "Vercel",
       "Heroku",
       "AWS",
+      "Cloudflare",
+      "Amazon Web Services",
+      "Porkbun",
       "Openai",
       "ChatGPT",
       "Wix.com",
@@ -399,6 +423,7 @@ const PRESET_RULES: readonly {
       "You tech",
       "Jetstar",
       "Cebu Air",
+      "Travels",
     ],
   },
   {
@@ -416,6 +441,8 @@ const PRESET_RULES: readonly {
       "Youtrip",
       "You tech",
       "Jetstar",
+      "Cebu Air",
+      "Travels",
     ],
   },
 ];
@@ -767,7 +794,7 @@ function splitLegacyTransferPreset(database) {
   const creditPreset = PRESET_RULES.find((preset) => preset.key === "transfer-credit");
   const debitKeys = new Set(
     (debitPreset ? debitPreset.substrings : []).map((line) =>
-      String(line).trim().toLowerCase(),
+      String(line).trim().toLowerCase()
     ),
   );
   const creditKeys = new Set(

@@ -6,12 +6,19 @@
 import type { AccountType } from "@/lib/db";
 import { dbsParser } from "@/lib/statements/dbs";
 import { ocbcParser } from "@/lib/statements/ocbc";
+import { ocbcCreditParser } from "@/lib/statements/ocbc-credit";
 import { paylahParser } from "@/lib/statements/paylah";
 import { extractPdfPages } from "@/lib/statements/pdf";
 import type { ParsedStatement, StatementParser } from "@/lib/statements/types";
 import { uobCreditParser } from "@/lib/statements/uob-credit";
 
-const parsers: StatementParser[] = [paylahParser, ocbcParser, dbsParser, uobCreditParser];
+const parsers: StatementParser[] = [
+  paylahParser,
+  ocbcCreditParser,
+  ocbcParser,
+  dbsParser,
+  uobCreditParser,
+];
 
 export async function parseStatement(
   bytes: Uint8Array,
